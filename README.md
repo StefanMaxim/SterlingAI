@@ -1,2 +1,2 @@
-# HintSor
+# LearnSor
 iykyk
