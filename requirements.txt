@@ -1,0 +1,20 @@
+# LearnSor - AI-Powered Learning Assistant
+# Core dependencies for hint generation and context analysis
+
+# AI/ML
+anthropic>=0.68.0
+
+# Environment management
+python-dotenv>=1.0.0
+
+# File system operations (built-in, but listed for clarity)
+# os, glob - built-in Python modules
+
+# Optional: For enhanced project analysis
+# ast - built-in Python module for code parsing
+# json - built-in Python module for configuration
+
+# Development dependencies (optional)
+# pytest>=7.0.0
+# black>=23.0.0
+# flake8>=6.0.0
