@@ -1,0 +1,47 @@
+{
+  "name": "learnsor",
+  "displayName": "LearnSor - AI Learning Assistant",
+  "description": "Educational AI that teaches programming concepts step-by-step",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": ["Education", "Other"],
+  "activationEvents": [],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "learnsor.askQuestion",
+        "title": "Ask LearnSor"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "learnsor.askQuestion",
+        "key": "ctrl+shift+l",
+        "mac": "cmd+shift+l",
+        "when": "editorTextFocus && editorHasSelection"
+      }
+    ],
+    "configuration": {
+      "title": "LearnSor",
+      "properties": {
+        "learnsor.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Your Claude API key"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "axios": "^1.6.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.74.0"
+  }
+}
