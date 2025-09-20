@@ -379,6 +379,8 @@ EXPLANATION:
 
     except anthropic.APIError as e:
         return f"API Error: {str(e)}"
+    except (FileNotFoundError, PermissionError, UnicodeDecodeError) as e:
+        return f"File error: {str(e)}"
     except Exception as e:
         return f"Unexpected error: {str(e)}"
 
@@ -495,8 +497,30 @@ def parse_and_enhance_hints(level1_hints, level2_hints, level3_hints):
     return '\n'.join(enhanced_lines)
 
 
+__all__ = [
+    "generate_hints",
+    "generate_level2_hints",
+    "generate_level3_hints",
+    "parse_and_enhance_hints",
+    "detect_language_from_filename",
+    "generate_all_hints",
+]
 
+def generate_all_hints(user_code, task_description, filename=None, project_path=".", programming_language=None, additional_instructions=None):
+    lang = programming_language or (detect_language_from_filename(filename) if filename else "python")
+    l1 = generate_hints(user_code, task_description, programming_language=lang, filename=filename, project_path=project_path, additional_instructions=additional_instructions)
+    l2 = generate_level2_hints(l1, lang, user_code, task_description)
+    l3 = generate_level3_hints(l2, lang, user_code, task_description)
+    combined = parse_and_enhance_hints(l1, l2, l3)
+    return {"level1": l1, "level2": l2, "level3": l3, "combined": combined}
 
+"""
+GUI Usage:
+    from api_client import generate_all_hints
+
+    result = generate_all_hints(user_code, task, filename="main.cpp", project_path=".")
+    render_text = result["combined"]
+"""
 # Example usage - Test with different scenarios
 if __name__ == "__main__":
     print("LearnSor Hint Generation Examples")
@@ -509,27 +533,27 @@ if __name__ == "__main__":
 
     # Level 1: Get conceptual hints with project context
     print("\n📚 LEVEL 1 - Conceptual Learning (with project context):")
-    level1_hints = generate_hints(python_code, python_task, project_path=".", filename="script.py")
+    demo_level1 = generate_hints(python_code, python_task, project_path=".", filename="script.py")
     print("Generated conceptual hints:")
-    print(level1_hints)
+    print(demo_level1)
 
     # Level 2: Get implementation details with Level 1 context
     print("\n🔧 LEVEL 2 - Implementation Details (with Level 1 context):")
-    level2_hints = generate_level2_hints(level1_hints, "python", python_code, python_task)
+    demo_level2 = generate_level2_hints(demo_level1, "python", python_code, python_task)
     print("Generated HOW hints only:")
-    print(level2_hints)
+    print(demo_level2)
 
     # Level 3: Get CODE snippets with blanks
     print("\n💡 LEVEL 3 - CODE Snippets (with blanks):")
-    level3_hints = generate_level3_hints(level2_hints, "python", python_code, python_task)
+    demo_level3 = generate_level3_hints(demo_level2, "python", python_code, python_task)
     print("Generated CODE hints with blanks:")
-    print(level3_hints)
+    print(demo_level3)
 
     # Combined: Parse and enhance into CONCEPT + WHY + HOW + CODE
     print("\n🎯 COMBINED - Enhanced Hints:")
-    enhanced_hints = parse_and_enhance_hints(level1_hints, level2_hints, level3_hints)
+    demo_enhanced = parse_and_enhance_hints(demo_level1, demo_level2, demo_level3)
     print("Final enhanced hints with CONCEPT + WHY + HOW + CODE:")
-    print(enhanced_hints)
+    print(demo_enhanced)
 
     # Example 2: C++ Implementation
     print("\n\n2. C++ IMPLEMENTATION EXAMPLE:")
