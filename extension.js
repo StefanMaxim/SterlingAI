@@ -8,6 +8,14 @@ const LEARNING_LEVELS = [
   { id: 'snippet', title: '💾 Code Snippet', description: 'Working code example' }
 ];
 
+// Track user progress and timing
+let userProgress = {
+  currentLevel: 0,
+  levelTimestamps: {},
+  selectedCode: '',
+  currentQuestion: ''
+};
+
 function activate(context) {
   console.log('LearnSor extension is now active!');
 
@@ -20,11 +28,9 @@ function activate(context) {
       vscode.window.showErrorMessage('No active editor found');
       return;
     }
-    console.log('Editor found');
 
     const selection = editor.selection;
     const selectedText = editor.document.getText(selection);
-    console.log('Selected text:', selectedText);
     
     if (!selectedText) {
       console.log('No text selected');
@@ -32,58 +38,139 @@ function activate(context) {
       return;
     }
 
-    console.log('About to show quick pick');
-    const items = LEARNING_LEVELS.map(function(level) {
-      return {
-        label: level.title,
-        description: level.description,
-        level: level.id
+    // Reset progress for new code selection
+    if (selectedText !== userProgress.selectedCode) {
+      userProgress = {
+        currentLevel: 0,
+        levelTimestamps: {},
+        selectedCode: selectedText,
+        currentQuestion: ''
       };
-    });
+    }
 
-    vscode.window.showQuickPick(items, {
-      placeHolder: 'How would you like to learn about this code?'
-    }).then(function(chosen) {
-      console.log('User chose:', chosen);
-      if (!chosen) return;
+    vscode.window.showInputBox({
+      prompt: 'What would you like to learn about the selected code?',
+      placeHolder: 'e.g., "How do I implement error handling here?"'
+    }).then(function(question) {
+      if (!question) return;
 
-      vscode.window.showInputBox({
-        prompt: 'What would you like to learn about the selected code?',
-        placeHolder: 'e.g., "How do I implement error handling here?"'
-      }).then(function(question) {
-        console.log('User question:', question);
-        if (!question) return;
-
-        console.log('Creating webview panel');
-        const panel = vscode.window.createWebviewPanel(
-          'learnsor',
-          'LearnSor Learning Assistant',
-          vscode.ViewColumn.Beside,
-          {
-            enableScripts: true,
-            retainContextWhenHidden: true
-          }
-        );
-
-        panel.webview.html = getLoadingHtml();
-
-        const language = getLanguageFromUri(editor.document.uri);
-        console.log('Language detected:', language);
-        
-        console.log('Calling Claude API...');
-        generateEducationalResponse(selectedText, question, chosen.level, language)
-          .then(function(response) {
-            panel.webview.html = getResponseHtml(response, selectedText, question, chosen.label);
-          })
-          .catch(function(error) {
-            console.log('Error occurred:', error);
-            panel.webview.html = getErrorHtml(error.message || 'Unknown error');
-          });
-      });
+      userProgress.currentQuestion = question;
+      showLearningInterface(selectedText, question, editor);
     });
   });
 
   context.subscriptions.push(disposable);
+}
+
+function showLearningInterface(selectedText, question, editor) {
+  console.log('Creating enhanced webview panel');
+  const panel = vscode.window.createWebviewPanel(
+    'learnsor',
+    'LearnSor Learning Assistant',
+    vscode.ViewColumn.Beside,
+    {
+      enableScripts: true,
+      retainContextWhenHidden: true
+    }
+  );
+
+  panel.webview.html = getEnhancedInterfaceHtml(selectedText, question);
+
+  // Handle messages from webview
+  panel.webview.onDidReceiveMessage(function(message) {
+    console.log('Received message:', message);
+    
+    switch (message.command) {
+      case 'requestLevel':
+        handleLevelRequest(message.level, selectedText, question, editor, panel);
+        break;
+      case 'askFollowUp':
+        handleFollowUpQuestion(message.question, selectedText, editor, panel);
+        break;
+      case 'toggleTheme':
+        // Theme toggle handled in webview
+        break;
+    }
+  });
+}
+
+function handleLevelRequest(requestedLevel, selectedText, question, editor, panel) {
+  console.log('Handling level request for:', requestedLevel);
+  const levelIndex = LEARNING_LEVELS.findIndex(l => l.id === requestedLevel);
+  const currentTime = Date.now();
+  
+  // Check if user can access this level
+  if (levelIndex > userProgress.currentLevel) {
+    // Check if they've waited long enough
+    const lastLevelTime = userProgress.levelTimestamps[userProgress.currentLevel];
+    if (lastLevelTime && (currentTime - lastLevelTime) < 60000) {
+      const waitTime = Math.ceil((60000 - (currentTime - lastLevelTime)) / 1000);
+      panel.webview.postMessage({
+        command: 'showError',
+        message: `Please wait ${waitTime} more seconds before accessing the next level. Learn progressively! 🎓`
+      });
+      return;
+    }
+  }
+
+  // Allow access and generate response
+  const language = getLanguageFromUri(editor.document.uri);
+  console.log('Sending loading message to webview');
+  
+  panel.webview.postMessage({
+    command: 'showLoading',
+    level: requestedLevel
+  });
+
+  console.log('Calling generateEducationalResponse...');
+  generateEducationalResponse(selectedText, question, requestedLevel, language)
+    .then(function(response) {
+      console.log('Got response, sending to webview');
+      // Update progress
+      if (levelIndex >= userProgress.currentLevel) {
+        userProgress.currentLevel = levelIndex;
+        userProgress.levelTimestamps[levelIndex] = currentTime;
+      }
+
+      panel.webview.postMessage({
+        command: 'showResponse',
+        level: requestedLevel,
+        levelTitle: LEARNING_LEVELS[levelIndex].title,
+        response: response,
+        canProceed: levelIndex < LEARNING_LEVELS.length - 1
+      });
+    })
+    .catch(function(error) {
+      console.log('Error in generateEducationalResponse:', error);
+      panel.webview.postMessage({
+        command: 'showError',
+        message: error.message || 'Unknown error occurred'
+      });
+    });
+}
+
+function handleFollowUpQuestion(followUpQuestion, selectedText, editor, panel) {
+  const language = getLanguageFromUri(editor.document.uri);
+  const currentLevelId = LEARNING_LEVELS[userProgress.currentLevel].id;
+  
+  panel.webview.postMessage({
+    command: 'showLoading',
+    level: 'followup'
+  });
+
+  generateEducationalResponse(selectedText, followUpQuestion, currentLevelId, language)
+    .then(function(response) {
+      panel.webview.postMessage({
+        command: 'showFollowUpResponse',
+        response: response
+      });
+    })
+    .catch(function(error) {
+      panel.webview.postMessage({
+        command: 'showError',
+        message: error.message || 'Unknown error occurred'
+      });
+    });
 }
 
 function generateEducationalResponse(code, question, level, language) {
@@ -126,15 +213,23 @@ function generateEducationalResponse(code, question, level, language) {
 
     axios.post('https://api.anthropic.com/v1/messages', requestData, config)
       .then(function(response) {
-        console.log('API Response:', response.data);
-        resolve(response.data.content[0].text);
+        console.log('API Response received:', JSON.stringify(response.data, null, 2));
+        if (Array.isArray(response.data.content) && response.data.content[0]?.text) {
+          resolve(response.data.content[0].text);
+        } else if (typeof response.data.content === 'string') {
+          resolve(response.data.content);
+        } else {
+          console.log('Unexpected API response format:', response.data);
+          resolve('Unexpected API response format: ' + JSON.stringify(response.data));
+        }
       })
       .catch(function(error) {
-        console.log('API Error details:', error.response ? error.response.data : error.message);
         if (error.response) {
+          console.log('API Error details:', JSON.stringify(error.response.data, null, 2));
           const errorMsg = error.response.data.error ? error.response.data.error.message : 'Unknown API error';
           reject(new Error('API Error: ' + errorMsg + ' (Status: ' + error.response.status + ')'));
         } else {
+          console.log('Network Error:', error.message);
           reject(new Error('Network Error: ' + error.message));
         }
       });
@@ -155,21 +250,503 @@ function getLanguageFromUri(uri) {
   return langMap[extLower] || 'code';
 }
 
-function getLoadingHtml() {
-  return '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>LearnSor</title><style>body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 20px; }.loading { text-align: center; padding: 40px; }.spinner { animation: spin 1s linear infinite; display: inline-block; }@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }</style></head><body><div class="loading"><div class="spinner">🤔</div><h3>LearnSor is thinking...</h3><p>Generating your personalized learning response</p></div></body></html>';
-}
-
-function getResponseHtml(response, code, question, level) {
-  const escapedCode = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function getEnhancedInterfaceHtml(selectedCode, question) {
+  const escapedCode = selectedCode.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const escapedQuestion = question.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const escapedResponse = response.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
   
-  return '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>LearnSor Response</title><style>body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 20px; line-height: 1.6; max-width: 800px; }.header { border-bottom: 2px solid #007ACC; padding-bottom: 10px; margin-bottom: 20px; }.question { background: #f5f5f5; padding: 15px; border-radius: 8px; margin-bottom: 20px; }.code-block { background: #2d2d2d; color: #f8f8f2; padding: 15px; border-radius: 8px; font-family: "Courier New", monospace; margin: 10px 0; }.response { background: white; border-left: 4px solid #007ACC; padding: 20px; margin: 20px 0; }.level-badge { background: #007ACC; color: white; padding: 4px 12px; border-radius: 12px; font-size: 0.8em; }pre { white-space: pre-wrap; word-wrap: break-word; }</style></head><body><div class="header"><h2>🎓 LearnSor Learning Assistant</h2><span class="level-badge">' + level + '</span></div><div class="question"><h3>Your Question:</h3><p><em>"' + escapedQuestion + '"</em></p><h4>Selected Code:</h4><div class="code-block"><pre>' + escapedCode + '</pre></div></div><div class="response"><h3>Learning Response:</h3><div>' + escapedResponse + '</div></div></body></html>';
-}
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>LearnSor Learning Assistant</title>
+        <style>
+            :root {
+                --bg-primary: #ffffff;
+                --bg-secondary: #f8f9fa;
+                --bg-tertiary: #e9ecef;
+                --text-primary: #212529;
+                --text-secondary: #495057;
+                --text-muted: #6c757d;
+                --border: #dee2e6;
+                --accent: #007ACC;
+                --accent-hover: #005a9e;
+                --success: #28a745;
+                --warning: #ffc107;
+                --error: #dc3545;
+                --code-bg: #2d2d2d;
+                --code-text: #f8f8f2;
+            }
+            
+            [data-theme="dark"] {
+                --bg-primary: #1e1e1e;
+                --bg-secondary: #252526;
+                --bg-tertiary: #2d2d30;
+                --text-primary: #cccccc;
+                --text-secondary: #c9c9c9;
+                --text-muted: #969696;
+                --border: #3e3e42;
+                --accent: #4fc3f7;
+                --accent-hover: #29b6f6;
+                --code-bg: #1e1e1e;
+                --code-text: #d4d4d4;
+            }
 
-function getErrorHtml(error) {
-  const escapedError = error.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  return '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>LearnSor Error</title><style>body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 20px; }.error { background: #ffe6e6; border: 1px solid #ffcccc; padding: 20px; border-radius: 8px; }</style></head><body><div class="error"><h3>❌ Oops! Something went wrong</h3><p>' + escapedError + '</p><p><strong>Setup help:</strong> Make sure to set your Claude API key in VS Code settings under "learnsor.apiKey"</p></div></body></html>';
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                background: var(--bg-primary);
+                color: var(--text-primary);
+                line-height: 1.6;
+                transition: all 0.3s ease;
+            }
+            
+            .container {
+                max-width: 900px;
+                margin: 0 auto;
+                padding: 20px;
+                min-height: 100vh;
+            }
+            
+            .header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 20px 0;
+                border-bottom: 2px solid var(--accent);
+                margin-bottom: 20px;
+            }
+            
+            .theme-toggle {
+                background: var(--accent);
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 6px;
+                cursor: pointer;
+                font-size: 14px;
+                transition: all 0.2s ease;
+            }
+            
+            .theme-toggle:hover {
+                background: var(--accent-hover);
+                transform: translateY(-1px);
+            }
+            
+            .question-section {
+                background: var(--bg-secondary);
+                padding: 20px;
+                border-radius: 12px;
+                margin-bottom: 24px;
+                border: 1px solid var(--border);
+            }
+            
+            .code-block {
+                background: var(--code-bg);
+                color: var(--code-text);
+                padding: 16px;
+                border-radius: 8px;
+                font-family: 'Courier New', Monaco, monospace;
+                font-size: 14px;
+                margin: 12px 0;
+                overflow-x: auto;
+                border: 1px solid var(--border);
+            }
+            
+            .learning-levels {
+                display: grid;
+                gap: 16px;
+                margin-bottom: 24px;
+            }
+            
+            .level-button {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 16px 20px;
+                background: var(--bg-secondary);
+                border: 2px solid var(--border);
+                border-radius: 12px;
+                cursor: pointer;
+                transition: all 0.3s ease;
+                position: relative;
+            }
+            
+            .level-button:hover:not(.disabled) {
+                border-color: var(--accent);
+                transform: translateY(-2px);
+                box-shadow: 0 4px 12px rgba(0, 122, 204, 0.15);
+            }
+            
+            .level-button.active {
+                border-color: var(--accent);
+                background: var(--accent);
+                color: white;
+            }
+            
+            .level-button.disabled {
+                opacity: 0.5;
+                cursor: not-allowed;
+                background: var(--bg-tertiary);
+            }
+            
+            .level-info {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+            }
+            
+            .level-status {
+                font-size: 12px;
+                padding: 4px 8px;
+                border-radius: 12px;
+                font-weight: bold;
+            }
+            
+            .level-status.locked {
+                background: var(--warning);
+                color: white;
+            }
+            
+            .level-status.available {
+                background: var(--success);
+                color: white;
+            }
+            
+            .level-status.completed {
+                background: var(--accent);
+                color: white;
+            }
+            
+            .response-area {
+                background: var(--bg-secondary);
+                border-radius: 12px;
+                padding: 20px;
+                margin: 20px 0;
+                border-left: 4px solid var(--accent);
+                display: none;
+            }
+            
+            .response-area.show {
+                display: block;
+                animation: slideIn 0.3s ease;
+            }
+            
+            @keyframes slideIn {
+                from { opacity: 0; transform: translateY(20px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+            
+            .chat-interface {
+                margin-top: 24px;
+                background: var(--bg-tertiary);
+                border-radius: 12px;
+                padding: 16px;
+                display: none;
+            }
+            
+            .chat-interface.show {
+                display: block;
+            }
+            
+            .chat-history {
+                max-height: 300px;
+                overflow-y: auto;
+                margin-bottom: 16px;
+                padding: 12px;
+                background: var(--bg-primary);
+                border-radius: 8px;
+                border: 1px solid var(--border);
+            }
+            
+            .chat-message {
+                padding: 8px 12px;
+                margin: 8px 0;
+                border-radius: 8px;
+            }
+            
+            .chat-message.user {
+                background: var(--accent);
+                color: white;
+                margin-left: 20%;
+            }
+            
+            .chat-message.assistant {
+                background: var(--bg-secondary);
+                border: 1px solid var(--border);
+                margin-right: 20%;
+            }
+            
+            .chat-input-container {
+                display: flex;
+                gap: 8px;
+            }
+            
+            .chat-input {
+                flex: 1;
+                padding: 12px;
+                border: 2px solid var(--border);
+                border-radius: 8px;
+                background: var(--bg-primary);
+                color: var(--text-primary);
+                font-size: 14px;
+            }
+            
+            .chat-input:focus {
+                outline: none;
+                border-color: var(--accent);
+            }
+            
+            .chat-send {
+                padding: 12px 20px;
+                background: var(--accent);
+                color: white;
+                border: none;
+                border-radius: 8px;
+                cursor: pointer;
+                font-weight: bold;
+                transition: all 0.2s ease;
+            }
+            
+            .chat-send:hover {
+                background: var(--accent-hover);
+            }
+            
+            .loading {
+                text-align: center;
+                padding: 40px;
+                color: var(--text-muted);
+            }
+            
+            .spinner {
+                display: inline-block;
+                animation: spin 1s linear infinite;
+                font-size: 24px;
+                margin-bottom: 12px;
+            }
+            
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+            
+            .error-message {
+                background: var(--error);
+                color: white;
+                padding: 16px;
+                border-radius: 8px;
+                margin: 16px 0;
+                display: none;
+            }
+            
+            .error-message.show {
+                display: block;
+                animation: slideIn 0.3s ease;
+            }
+        </style>
+    </head>
+    <body data-theme="light">
+        <div class="container">
+            <div class="header">
+                <h1>🎓 LearnSor Learning Assistant</h1>
+                <button class="theme-toggle" onclick="toggleTheme()">🌙 Dark Mode</button>
+            </div>
+            
+            <div class="question-section">
+                <h3>Your Question:</h3>
+                <p><em>"${escapedQuestion}"</em></p>
+                <h4>Selected Code:</h4>
+                <div class="code-block">${escapedCode}</div>
+            </div>
+            
+            <div class="error-message" id="errorMessage"></div>
+            
+            <div class="learning-levels">
+                <div class="level-button available" onclick="requestLevel('logical', 0)">
+                    <div class="level-info">
+                        <span>🧠 Logical Steps</span>
+                        <small>Walk through the thinking process</small>
+                    </div>
+                    <span class="level-status available">START HERE</span>
+                </div>
+                
+                <div class="level-button disabled" id="level-pseudocode">
+                    <div class="level-info">
+                        <span>📝 Pseudo-code</span>
+                        <small>Show the algorithm structure</small>
+                    </div>
+                    <span class="level-status locked">LOCKED</span>
+                </div>
+                
+                <div class="level-button disabled" id="level-functions">
+                    <div class="level-info">
+                        <span>🔧 Functions & Methods</span>
+                        <small>Specific functions to use</small>
+                    </div>
+                    <span class="level-status locked">LOCKED</span>
+                </div>
+                
+                <div class="level-button disabled" id="level-snippet">
+                    <div class="level-info">
+                        <span>💾 Code Snippet</span>
+                        <small>Working code example</small>
+                    </div>
+                    <span class="level-status locked">LOCKED</span>
+                </div>
+            </div>
+            
+            <div class="response-area" id="responseArea">
+                <h3 id="responseTitle">Response</h3>
+                <div id="responseContent"></div>
+            </div>
+            
+            <div class="chat-interface" id="chatInterface">
+                <h4>💬 Ask Follow-up Questions</h4>
+                <div class="chat-history" id="chatHistory"></div>
+                <div class="chat-input-container">
+                    <input type="text" class="chat-input" id="chatInput" placeholder="Ask a follow-up question..." onkeypress="handleChatKeyPress(event)">
+                    <button class="chat-send" onclick="sendFollowUp()">Send</button>
+                </div>
+            </div>
+        </div>
+        
+        <script>
+            const vscode = acquireVsCodeApi();
+            let currentTheme = 'light';
+            let levelTimers = {};
+            
+            function toggleTheme() {
+                currentTheme = currentTheme === 'light' ? 'dark' : 'light';
+                document.body.setAttribute('data-theme', currentTheme);
+                document.querySelector('.theme-toggle').textContent = currentTheme === 'light' ? '🌙 Dark Mode' : '☀️ Light Mode';
+                vscode.postMessage({command: 'toggleTheme', theme: currentTheme});
+            }
+            
+            function requestLevel(levelId, index) {
+                console.log('Requesting level:', levelId);
+                const button = document.querySelector(\`[onclick="requestLevel('\${levelId}', \${index})"]\`) || document.getElementById(\`level-\${levelId}\`);
+                if (button && button.classList.contains('disabled')) return;
+                
+                showLoading();
+                vscode.postMessage({command: 'requestLevel', level: levelId});
+                
+                // Fallback timeout in case message doesn't come back
+                setTimeout(() => {
+                    const responseArea = document.getElementById('responseArea');
+                    if (responseArea.innerHTML.includes('LearnSor is thinking')) {
+                        showError('Request timed out. Please try again or check your API key.');
+                    }
+                }, 30000);
+            }
+            
+            function showLoading() {
+                const responseArea = document.getElementById('responseArea');
+                responseArea.innerHTML = '<div class="loading"><div class="spinner">🤔</div><h3>LearnSor is thinking...</h3><p>Generating your personalized learning response</p></div>';
+                responseArea.classList.add('show');
+            }
+            
+            function showError(message) {
+                const errorDiv = document.getElementById('errorMessage');
+                errorDiv.textContent = message;
+                errorDiv.classList.add('show');
+                setTimeout(() => errorDiv.classList.remove('show'), 5000);
+            }
+            
+            function unlockNextLevel(currentIndex) {
+                const levels = ['logical', 'pseudocode', 'functions', 'snippet'];
+                if (currentIndex < levels.length - 1) {
+                    const nextLevel = levels[currentIndex + 1];
+                    const nextButton = document.getElementById(\`level-\${nextLevel}\`);
+                    if (nextButton) {
+                        // Start 1-minute timer
+                        setTimeout(() => {
+                            nextButton.classList.remove('disabled');
+                            nextButton.onclick = () => requestLevel(nextLevel, currentIndex + 1);
+                            const statusSpan = nextButton.querySelector('.level-status');
+                            statusSpan.textContent = 'AVAILABLE';
+                            statusSpan.className = 'level-status available';
+                        }, 60000); // 60 seconds
+                        
+                        // Show countdown
+                        const statusSpan = nextButton.querySelector('.level-status');
+                        let countdown = 60;
+                        const timer = setInterval(() => {
+                            statusSpan.textContent = \`WAIT \${countdown}s\`;
+                            countdown--;
+                            if (countdown < 0) {
+                                clearInterval(timer);
+                            }
+                        }, 1000);
+                    }
+                }
+            }
+            
+            function sendFollowUp() {
+                const input = document.getElementById('chatInput');
+                const question = input.value.trim();
+                if (!question) return;
+                
+                addChatMessage(question, 'user');
+                input.value = '';
+                
+                vscode.postMessage({command: 'askFollowUp', question: question});
+            }
+            
+            function handleChatKeyPress(event) {
+                if (event.key === 'Enter') {
+                    sendFollowUp();
+                }
+            }
+            
+            function addChatMessage(message, sender) {
+                const chatHistory = document.getElementById('chatHistory');
+                const messageDiv = document.createElement('div');
+                messageDiv.className = \`chat-message \${sender}\`;
+                messageDiv.textContent = message;
+                chatHistory.appendChild(messageDiv);
+                chatHistory.scrollTop = chatHistory.scrollHeight;
+            }
+            
+            // Listen for messages from extension
+            window.addEventListener('message', event => {
+                const message = event.data;
+                switch (message.command) {
+                    case 'showLoading':
+                        showLoading();
+                        break;
+                    case 'showResponse':
+                        const responseArea = document.getElementById('responseArea');
+                        const responseTitle = document.getElementById('responseTitle');
+                        const responseContent = document.getElementById('responseContent');
+                        
+                        responseTitle.textContent = message.levelTitle + ' Response';
+                        responseContent.innerHTML = message.response.replace(/\\n/g, '<br>');
+                        responseArea.classList.add('show');
+                        
+                        // Show chat interface
+                        document.getElementById('chatInterface').classList.add('show');
+                        
+                        // Unlock next level if available
+                        const levels = ['logical', 'pseudocode', 'functions', 'snippet'];
+                        const currentIndex = levels.indexOf(message.level);
+                        if (currentIndex >= 0) {
+                            unlockNextLevel(currentIndex);
+                        }
+                        break;
+                    case 'showFollowUpResponse':
+                        addChatMessage(message.response, 'assistant');
+                        break;
+                    case 'showError':
+                        showError(message.message);
+                        break;
+                }
+            });
+        </script>
+    </body>
+    </html>
+  `;
 }
 
 function deactivate() {}
