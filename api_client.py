@@ -315,80 +315,60 @@ Example output format:
     except Exception as e:
         return f"Unexpected error: {str(e)}"
     
-def generate_level3_hints(level1_response, level2_response, programming_language, user_code="", task_description=""):
+def generate_level3_hints(level2_response, programming_language, user_code="", task_description=""):
     """
-    Generate Level 3 hints with code snippets in a fill-in-the-blank format.
+    Generate LEVEL 3 hints: actual code lines with fill-in-the-blank sections.
+    Each numbered hint begins with 'CODE:' and shows valid syntax containing blanks.
 
     Args:
-        level1_response (str): The complete Level 1 response (CONCEPT and WHY hints)
-        level2_response (str): The HOW implementation hints
+        level2_response (str): The HOW hints from Level 2
         programming_language (str): The programming language being used
         user_code (str, optional): The user's current code for context
-        task_description (str, optional): Original task description for context
+        task_description (str, optional): Original task description
 
     Returns:
-        str: Level 3 hints with CONCEPT, WHY, HOW, and code snippets
+        str: Numbered CODE hints with blanks inside actual syntax
     """
-    # Get comment block syntax for this language
+    # Get comment block syntax
     start_comment, end_comment = get_comment_block_syntax(programming_language)
 
-    # Build the prompt for Level 3 hints with code snippets
-    prompt = f"""You are LearnSor, an AI tutor that helps people learn programming by providing hints instead of writing code for them.
+    # Build the prompt
+    prompt = f"""You are LearnSor, an AI tutor that helps people learn programming.
 
-CONTEXT FROM PREVIOUS LEVELS:
-The user has already received these foundational hints:
-Level 1 (CONCEPT and WHY):
-{level1_response}
-
-Level 2 (HOW):
+CONTEXT FROM LEVEL 2:
+The user has already received these HOW hints:
 {level2_response}
 
 Programming language: {programming_language}
 Original task: {task_description}
 User's current code: {user_code}
 
-THIRD LEVEL HINTING - CODE SNIPPETS IN FILL-IN-THE-BLANK FORMAT:
-Based on the Level 1 and Level 2 hints the user already received, generate code snippets in a fill-in-the-blank format that:
-1. Provide partial code with placeholders like <var>, <func>, <condition>, etc.
-2. Are specific to the user's task and context
-3. Help the user understand the structure and logic without giving complete answers
-4. Include comments explaining what each placeholder represents
-
-IMPORTANT:
-- The user has already seen the CONCEPT, WHY, and HOW sections
-- Provide code snippets with placeholders, not complete solutions
-- Use comments to explain placeholders and guide the user
-- Ensure the snippets align with the user's task and programming language
-
-Format as numbered sections matching the Level 1 and Level 2 hints:
+THIRD LEVEL HINTING - CODE WITH BLANKS:
+- Each hint must start with "<number>. CODE:"
+- Provide real {programming_language} syntax (not pseudocode, not descriptions).
+- Insert blanks strictly using bracketed ALL-CAPS placeholders like [FUNCTION_NAME], [PARAM1], [CONDITION], [INDEX], [PLAYER], etc.
+- If you include suggested example literal text, also put it in ALL-CAPS brackets, e.g., [HELLO WORLD].
+- The code should be as close as possible to the final working solution, but incomplete in small places.
+- After each CODE block, add an EXPLANATION section with 2-3 short lines describing what the code does and how to fill placeholders.
 
 Example output format:
 {start_comment}
-1. CODE SNIPPET:
-# Define a function to check if a move is valid
-def <func_name>(<param1>, <param2>):
-    if <condition>:
-        return True
-    return False
-# <func_name>: Name of the function (e.g., is_valid_move)
-# <param1>, <param2>: Parameters for the function (e.g., row, column)
-# <condition>: Logic to check validity (e.g., within bounds, not occupied)
+1. CODE: print("[HELLO WORLD]")
+EXPLANATION:
+- Prints a greeting to the console.
+- Replace [HELLO WORLD] with the text you want to show.
 
-2. CODE SNIPPET:
-# Create a loop to alternate between players
-while <condition>:
-    print("Player <player_num>'s turn")
-    <action>
-# <condition>: Loop condition (e.g., game not over)
-# <player_num>: Variable for the current player
-# <action>: Code for the player's move
+2. CODE: def [FUNCTION_NAME]([PARAM1]): print("Hello, " + [PARAM1])
+EXPLANATION:
+- Defines a function and uses the parameter in a message.
+- Replace [FUNCTION_NAME] and [PARAM1] with meaningful names.
 {end_comment}"""
 
     try:
         # Make API call to Claude
         response = client.messages.create(
             model="claude-3-5-sonnet-20241022",
-            max_tokens=2000,
+            max_tokens=1200,
             temperature=0.5,
             messages=[
                 {"role": "user", "content": prompt}
@@ -402,29 +382,33 @@ while <condition>:
     except Exception as e:
         return f"Unexpected error: {str(e)}"
 
-def parse_and_enhance_hints(level1_hints, level2_hints):
+def parse_and_enhance_hints(level1_hints, level2_hints, level3_hints):
     """
-    Parse level 1 hints and enhance them with level 2 HOW information.
+    Parse level 1 hints and enhance them with level 2 HOW and level 3 CODE information.
 
     Args:
         level1_hints (str): Original CONCEPT and WHY hints
         level2_hints (str): HOW implementation hints to add
+        level3_hints (str): CODE snippets with blanks to add
 
     Returns:
-        str: Enhanced hints with CONCEPT, WHY, and HOW sections
+        str: Enhanced hints with CONCEPT, WHY, HOW, and CODE sections
     """
     # Extract the content from comment blocks
     level1_content = level1_hints.strip()
     level2_content = level2_hints.strip()
+    level3_content = level3_hints.strip()
 
     # Remove comment block markers from both
     for marker in ['"""', '/*', '*/', '=begin', '=end', '<< \'COMMENT\'', 'COMMENT']:
         level1_content = level1_content.replace(marker, '').strip()
         level2_content = level2_content.replace(marker, '').strip()
+        level3_content = level3_content.replace(marker, '').strip()
 
     # Split into lines and process
     level1_lines = level1_content.split('\n')
     level2_lines = level2_content.split('\n')
+    level3_lines = level3_content.split('\n')
 
     # Parse level 2 HOW hints into a dictionary
     how_hints = {}
@@ -450,6 +434,29 @@ def parse_and_enhance_hints(level1_hints, level2_hints):
     if current_number and current_how_content:
         how_hints[current_number] = ' '.join(current_how_content)
 
+    # Parse level 3 CODE hints into a dictionary
+    code_hints = {}
+    current_number = None
+    current_code_lines = []
+
+    for line in level3_lines:
+        line_stripped = line.strip()
+        if line_stripped and line_stripped[0].isdigit() and 'CODE:' in line_stripped:
+            # Save previous code block
+            if current_number and current_code_lines:
+                code_hints[current_number] = '\n'.join(current_code_lines).strip()
+
+            # Start new code block
+            current_number = line_stripped.split('.')[0].strip()
+            code_part = line.split('CODE:', 1)[1].strip()
+            current_code_lines = [code_part] if code_part else []
+        elif current_number:
+            # Continue current code block (preserve original line format)
+            current_code_lines.append(line)
+
+    if current_number and current_code_lines:
+        code_hints[current_number] = '\n'.join(current_code_lines).strip()
+
     # Build enhanced hints
     enhanced_lines = []
     current_concept = None
@@ -474,6 +481,14 @@ def parse_and_enhance_hints(level1_hints, level2_hints):
                 indent = len(line) - len(line.lstrip())
                 how_line = ' ' * indent + f"HOW: {how_hints[current_concept]}"
                 enhanced_lines.append(how_line)
+            # Add corresponding CODE hint if available
+            if current_concept and current_concept in code_hints:
+                indent = len(line) - len(line.lstrip())
+                code_block = code_hints[current_concept].split('\n')
+                if code_block:
+                    enhanced_lines.append(' ' * indent + f"CODE: {code_block[0]}")
+                    for extra_line in code_block[1:]:
+                        enhanced_lines.append(' ' * indent + extra_line)
         else:
             enhanced_lines.append(line)
 
@@ -487,8 +502,8 @@ if __name__ == "__main__":
     print("LearnSor Hint Generation Examples")
     print("=" * 40)
 
-    # Example 1: Level 1 vs Level 2 Hinting Progression
-    print("\n1. HINT PROGRESSION: Level 1 → Level 2 (with full context)")
+    # Example 1: Level 1 → Level 2 → Level 3 Hinting Progression
+    print("\n1. HINT PROGRESSION: Level 1 → Level 2 → Level 3 (with full context)")
     python_code = ""
     python_task = "Make simple tic tac toe game with basic logic"
 
@@ -504,10 +519,16 @@ if __name__ == "__main__":
     print("Generated HOW hints only:")
     print(level2_hints)
 
-    # Combined: Parse and enhance
+    # Level 3: Get CODE snippets with blanks
+    print("\n💡 LEVEL 3 - CODE Snippets (with blanks):")
+    level3_hints = generate_level3_hints(level2_hints, "python", python_code, python_task)
+    print("Generated CODE hints with blanks:")
+    print(level3_hints)
+
+    # Combined: Parse and enhance into CONCEPT + WHY + HOW + CODE
     print("\n🎯 COMBINED - Enhanced Hints:")
-    enhanced_hints = parse_and_enhance_hints(level1_hints, level2_hints)
-    print("Final enhanced hints with CONCEPT + WHY + HOW:")
+    enhanced_hints = parse_and_enhance_hints(level1_hints, level2_hints, level3_hints)
+    print("Final enhanced hints with CONCEPT + WHY + HOW + CODE:")
     print(enhanced_hints)
 
     # Example 2: C++ Implementation
@@ -518,8 +539,9 @@ if __name__ == "__main__":
     print(f"Task: {cpp_task}")
     cpp_level1 = generate_hints(cpp_code, cpp_task, programming_language="cpp", filename="main.cpp")
     cpp_level2 = generate_level2_hints(cpp_level1, "cpp", cpp_code, cpp_task)
-    cpp_enhanced = parse_and_enhance_hints(cpp_level1, cpp_level2)
-    print("C++ Enhanced hints:")
+    cpp_level3 = generate_level3_hints(cpp_level2, "cpp", cpp_code, cpp_task)
+    cpp_enhanced = parse_and_enhance_hints(cpp_level1, cpp_level2, cpp_level3)
+    print("C++ Enhanced hints (with CODE):")
     print(cpp_enhanced)
 
     print("\n" + "=" * 40)
