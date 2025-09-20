@@ -314,6 +314,93 @@ Example output format:
         return f"API Error: {str(e)}"
     except Exception as e:
         return f"Unexpected error: {str(e)}"
+    
+def generate_level3_hints(level1_response, level2_response, programming_language, user_code="", task_description=""):
+    """
+    Generate Level 3 hints with code snippets in a fill-in-the-blank format.
+
+    Args:
+        level1_response (str): The complete Level 1 response (CONCEPT and WHY hints)
+        level2_response (str): The HOW implementation hints
+        programming_language (str): The programming language being used
+        user_code (str, optional): The user's current code for context
+        task_description (str, optional): Original task description for context
+
+    Returns:
+        str: Level 3 hints with CONCEPT, WHY, HOW, and code snippets
+    """
+    # Get comment block syntax for this language
+    start_comment, end_comment = get_comment_block_syntax(programming_language)
+
+    # Build the prompt for Level 3 hints with code snippets
+    prompt = f"""You are LearnSor, an AI tutor that helps people learn programming by providing hints instead of writing code for them.
+
+CONTEXT FROM PREVIOUS LEVELS:
+The user has already received these foundational hints:
+Level 1 (CONCEPT and WHY):
+{level1_response}
+
+Level 2 (HOW):
+{level2_response}
+
+Programming language: {programming_language}
+Original task: {task_description}
+User's current code: {user_code}
+
+THIRD LEVEL HINTING - CODE SNIPPETS IN FILL-IN-THE-BLANK FORMAT:
+Based on the Level 1 and Level 2 hints the user already received, generate code snippets in a fill-in-the-blank format that:
+1. Provide partial code with placeholders like <var>, <func>, <condition>, etc.
+2. Are specific to the user's task and context
+3. Help the user understand the structure and logic without giving complete answers
+4. Include comments explaining what each placeholder represents
+
+IMPORTANT:
+- The user has already seen the CONCEPT, WHY, and HOW sections
+- Provide code snippets with placeholders, not complete solutions
+- Use comments to explain placeholders and guide the user
+- Ensure the snippets align with the user's task and programming language
+
+Format as numbered sections matching the Level 1 and Level 2 hints:
+
+Example output format:
+{start_comment}
+1. CODE SNIPPET:
+# Define a function to check if a move is valid
+def <func_name>(<param1>, <param2>):
+    if <condition>:
+        return True
+    return False
+# <func_name>: Name of the function (e.g., is_valid_move)
+# <param1>, <param2>: Parameters for the function (e.g., row, column)
+# <condition>: Logic to check validity (e.g., within bounds, not occupied)
+
+2. CODE SNIPPET:
+# Create a loop to alternate between players
+while <condition>:
+    print("Player <player_num>'s turn")
+    <action>
+# <condition>: Loop condition (e.g., game not over)
+# <player_num>: Variable for the current player
+# <action>: Code for the player's move
+{end_comment}"""
+
+    try:
+        # Make API call to Claude
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=2000,
+            temperature=0.5,
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        return response.content[0].text
+
+    except anthropic.APIError as e:
+        return f"API Error: {str(e)}"
+    except Exception as e:
+        return f"Unexpected error: {str(e)}"
 
 def parse_and_enhance_hints(level1_hints, level2_hints):
     """
@@ -391,6 +478,9 @@ def parse_and_enhance_hints(level1_hints, level2_hints):
             enhanced_lines.append(line)
 
     return '\n'.join(enhanced_lines)
+
+
+
 
 # Example usage - Test with different scenarios
 if __name__ == "__main__":
