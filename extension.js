@@ -1,5 +1,7 @@
 const vscode = require('vscode');
 const axios = require('axios');
+const { spawn } = require('child_process');
+const path = require('path');
 
 const LEARNING_LEVELS = [
   { id: 'logical', title: '🧠 Logical Steps', description: 'Walk through the thinking process' },
@@ -174,65 +176,69 @@ function handleFollowUpQuestion(followUpQuestion, selectedText, editor, panel) {
 }
 
 function generateEducationalResponse(code, question, level, language) {
+  // Route through Python api_client to use the 3-level system
   return new Promise(function(resolve, reject) {
-    const apiKey = vscode.workspace.getConfiguration('learnsor').get('apiKey');
-    
-    if (!apiKey) {
-      reject(new Error('Please set your Claude API key in settings (learnsor.apiKey)'));
-      return;
-    }
+    const workspaceRoot = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0])
+      ? vscode.workspace.workspaceFolders[0].uri.fsPath
+      : __dirname;
 
-    const prompts = {
-      logical: 'You are an experienced CS teacher. A student has selected this ' + language + ' code and asked: "' + question + '"\n\nCode:\n```' + language + '\n' + code + '\n```\n\nExplain the logical thinking process step-by-step. Focus on the problem-solving approach, not specific syntax. Help them understand WHY each step is needed. Do not provide actual code.',
+    const activeEditor = vscode.window.activeTextEditor;
+    const filename = activeEditor ? path.basename(activeEditor.document.fileName) : undefined;
 
-      pseudocode: 'A student needs pseudocode help for this ' + language + ' code. Their question: "' + question + '"\n\nCode:\n```' + language + '\n' + code + '\n```\n\nProvide clear pseudocode that shows the algorithm structure. Use simple English with basic programming constructs (if/then, loop, etc.). No actual code syntax.',
+    const pySnippet = [
+      'import sys, json',
+      'from api_client import generate_all_hints',
+      'params = json.loads(sys.stdin.read())',
+      'res = generate_all_hints(params.get("code", ""), params.get("task", ""), filename=params.get("filename"), project_path=params.get("project_path", "."))',
+      'print(json.dumps(res))'
+    ].join('; ');
 
-      functions: 'A student wants to know what functions/methods to use for this ' + language + ' code. Their question: "' + question + '"\n\nCode:\n```' + language + '\n' + code + '\n```\n\nList the key functions, methods, or APIs they should research and use. Explain what each does and why it is useful for their problem. Include where to find documentation.',
+    const child = spawn('python', ['-c', pySnippet], { cwd: workspaceRoot });
 
-      snippet: 'Provide a short, educational code snippet for this ' + language + ' code. Student question: "' + question + '"\n\nOriginal code:\n```' + language + '\n' + code + '\n```\n\nGive a minimal working example with clear comments explaining each important line. Keep it concise but educational.'
-    };
+    let stdout = '';
+    let stderr = '';
 
-    const requestData = {
-      model: 'claude-3-5-sonnet-20241022',
-      max_tokens: 1000,
-      messages: [
-        {
-          role: 'user',
-          content: prompts[level]
-        }
-      ]
-    };
+    child.stdout.on('data', function(data) { stdout += data.toString(); });
+    child.stderr.on('data', function(data) { stderr += data.toString(); });
 
-    const config = {
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
+    child.on('error', function(err) {
+      reject(new Error('Failed to start Python: ' + err.message));
+    });
+
+    child.on('close', function(codeExit) {
+      if (codeExit !== 0) {
+        return reject(new Error('Python exited with code ' + codeExit + (stderr ? (': ' + stderr) : '')));
       }
-    };
+      try {
+        const parsed = JSON.parse(stdout || '{}');
+        switch (level) {
+          case 'logical':
+          case 'pseudocode':
+            resolve(parsed.level1 || parsed.combined || 'No Level 1 output');
+            break;
+          case 'functions':
+            resolve(parsed.level2 || 'No Level 2 output');
+            break;
+          case 'snippet':
+            resolve(parsed.level3 || 'No Level 3 output');
+            break;
+          default:
+            resolve(parsed.combined || parsed.level1 || 'No output');
+        }
+      } catch (e) {
+        reject(new Error('Failed to parse Python output: ' + e.message + (stdout ? (' | OUT: ' + stdout) : '')));
+      }
+    });
 
-    axios.post('https://api.anthropic.com/v1/messages', requestData, config)
-      .then(function(response) {
-        console.log('API Response received:', JSON.stringify(response.data, null, 2));
-        if (Array.isArray(response.data.content) && response.data.content[0]?.text) {
-          resolve(response.data.content[0].text);
-        } else if (typeof response.data.content === 'string') {
-          resolve(response.data.content);
-        } else {
-          console.log('Unexpected API response format:', response.data);
-          resolve('Unexpected API response format: ' + JSON.stringify(response.data));
-        }
-      })
-      .catch(function(error) {
-        if (error.response) {
-          console.log('API Error details:', JSON.stringify(error.response.data, null, 2));
-          const errorMsg = error.response.data.error ? error.response.data.error.message : 'Unknown API error';
-          reject(new Error('API Error: ' + errorMsg + ' (Status: ' + error.response.status + ')'));
-        } else {
-          console.log('Network Error:', error.message);
-          reject(new Error('Network Error: ' + error.message));
-        }
-      });
+    // Send params to Python via stdin
+    const payload = {
+      code: code,
+      task: question,
+      filename: filename,
+      project_path: workspaceRoot
+    };
+    child.stdin.write(JSON.stringify(payload));
+    child.stdin.end();
   });
 }
 
