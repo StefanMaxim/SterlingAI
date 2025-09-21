@@ -23,28 +23,61 @@
         <div class="error-message" id="errorMessage"></div>
         
         <div class="learning-levels">
-            <div class="level-button available" id="level-concept" role="button" tabindex="0">
-                <div class="level-info">
-                    <span>🧠 Concept & Why</span>
-                    <small>High-level steps and reasoning</small>
+            <div class="level-section">
+                <div class="level-button available" id="level-concept" role="button" tabindex="0">
+                    <div class="level-info">
+                        <span>🧠 Concept & Why</span>
+                        <small>High-level steps and reasoning</small>
+                    </div>
+                    <div class="level-controls">
+                        <span class="level-status available">START HERE</span>
+                        <span class="level-arrow" id="arrow-concept" style="display: none;">▼</span>
+                    </div>
                 </div>
-                <span class="level-status available">START HERE</span>
+                <div class="level-response-area" id="response-concept" style="display: none;">
+                    <div class="level-response-content" id="content-concept"></div>
+                    <button class="copy-level-btn" id="copy-concept" onclick="copyLevelToFile('concept')" style="display: none;">
+                        📋 Copy to File
+                    </button>
+                </div>
             </div>
             
-            <div class="level-button disabled" id="level-how" role="button" tabindex="0">
-                <div class="level-info">
-                    <span>🔧 How (Implementation Hints)</span>
-                    <small>Guided implementation ideas</small>
+            <div class="level-section">
+                <div class="level-button disabled" id="level-how" role="button" tabindex="0">
+                    <div class="level-info">
+                        <span>🔧 How (Implementation Hints)</span>
+                        <small>Guided implementation ideas</small>
+                    </div>
+                    <div class="level-controls">
+                        <span class="level-status locked" title="Complete the previous level first">LOCKED</span>
+                        <span class="level-arrow" id="arrow-how" style="display: none;">▼</span>
+                    </div>
                 </div>
-                <span class="level-status locked" title="Complete the previous level first">LOCKED</span>
+                <div class="level-response-area" id="response-how" style="display: none;">
+                    <div class="level-response-content" id="content-how"></div>
+                    <button class="copy-level-btn" id="copy-how" onclick="copyLevelToFile('how')" style="display: none;">
+                        📋 Copy to File
+                    </button>
+                </div>
             </div>
             
-            <div class="level-button disabled" id="level-code" role="button" tabindex="0">
-                <div class="level-info">
-                    <span>💾 Code (with blanks)</span>
-                    <small>Concrete code lines with blanks</small>
+            <div class="level-section">
+                <div class="level-button disabled" id="level-code" role="button" tabindex="0">
+                    <div class="level-info">
+                        <span>💾 Code (with blanks)</span>
+                        <small>Concrete code lines with blanks</small>
+                    </div>
+                    <div class="level-controls">
+                        <span class="level-status locked" title="Complete the previous level first">LOCKED</span>
+                        <span class="level-arrow" id="arrow-code" style="display: none;">▼</span>
+                    </div>
                 </div>
-                <span class="level-status locked" title="Complete the previous level first">LOCKED</span>
+                <div class="level-response-area" id="response-code" style="display: none;">
+                    <div class="level-response-content" id="content-code"></div>
+                    <button class="copy-level-btn" id="copy-code" onclick="copyLevelToFile('code')" style="display: none;">
+                        📋 Copy to File
+                    </button>
+                </div>
             </div>
         </div>
         

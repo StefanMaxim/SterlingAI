@@ -136,7 +136,7 @@ function handleLevelRequest(requestedLevel, selectedText, question, editor, pane
     command: 'showLoading',
     level: requestedLevel
   });
-  
+
   isRequestInFlight = true;
   
   generateEducationalResponse(selectedText, question, requestedLevel, language)
@@ -654,10 +654,10 @@ function getEnhancedInterfaceHtml(selectedCode, question, webview) {
       <body>
           <h1>Error loading interface</h1>
           <p>Could not load interface.html: ${error.message}</p>
-      </body>
-      </html>
-    `;
-  }
+    </body>
+    </html>
+  `;
+}
 }
 
 module.exports = {

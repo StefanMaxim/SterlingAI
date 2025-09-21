@@ -50,23 +50,61 @@ const vscode = acquireVsCodeApi();
                 if (concept) {
                     concept.replaceWith(concept.cloneNode(true));
                     const newConcept = document.getElementById('level-concept');
-                    newConcept.addEventListener('click', () => requestLevel('concept'));
+                     newConcept.addEventListener('click', () => handleLevelClick('concept'));
                 }
                 if (how) {
                     how.replaceWith(how.cloneNode(true));
                     const newHow = document.getElementById('level-how');
-                    newHow.addEventListener('click', () => { 
-                        if (!newHow.classList.contains('disabled')) requestLevel('how'); 
-                    });
+                     newHow.addEventListener('click', () => handleLevelClick('how'));
                 }
                 if (code) {
                     code.replaceWith(code.cloneNode(true));
                     const newCode = document.getElementById('level-code');
-                    newCode.addEventListener('click', () => { 
-                        if (!newCode.classList.contains('disabled')) requestLevel('code'); 
-                    });
+                     newCode.addEventListener('click', () => handleLevelClick('code'));
                 }
             })();
+             
+             function handleLevelClick(levelId) {
+                 const button = document.getElementById(`level-${levelId}`);
+                 const responseArea = document.getElementById(`response-${levelId}`);
+                 const arrow = document.getElementById(`arrow-${levelId}`);
+                 const content = document.getElementById(`content-${levelId}`);
+                 
+                 // If button is disabled (locked), don't do anything
+                 if (button && button.classList.contains('disabled')) {
+                     return;
+                 }
+                 
+                 // If there's already content, toggle the accordion (works for both active and completed)
+                 if (content && content.textContent.trim()) {
+                     const isExpanded = responseArea.style.display === 'block';
+                     
+                     if (isExpanded) {
+                         // Collapse
+                         responseArea.style.display = 'none';
+                         arrow.classList.remove('expanded');
+                     } else {
+                         // Expand
+                         responseArea.style.display = 'block';
+                         arrow.classList.add('expanded');
+                     }
+                 } else {
+                     // No content yet - only make request if not completed
+                     if (!button.classList.contains('completed')) {
+                         requestLevel(levelId);
+                     }
+                 }
+             }
+             
+             function copyLevelToFile(levelId) {
+                 const content = document.getElementById(`content-${levelId}`);
+                 if (content && content.textContent.trim()) {
+                     vscode.postMessage({
+                         command: 'copyToFile',
+                         text: content.textContent
+                     });
+                 }
+             }
             
             function showLoading() {
                 const responseArea = document.getElementById('responseArea');
@@ -142,8 +180,12 @@ const vscode = acquireVsCodeApi();
                 }
                 
                 webviewRequestInProgress = true;
-                addChatMessage(question, 'user');
-                addChatMessage('Thinking...', 'assistant'); // Show loading message
+                
+                // Store the question for the upcoming response
+                window.lastUserQuestion = question;
+                
+                // Add a temporary "thinking" accordion item
+                addChatAccordionItem(question, 'Thinking...');
                 input.value = '';
                 
                 vscode.postMessage({command: 'askFollowUp', question: question});
@@ -182,7 +224,7 @@ const vscode = acquireVsCodeApi();
                     }, 2000);
                 }
             }
-            
+
             function handleChatKeyPress(event) {
                 if (event.key === 'Enter') {
                     sendFollowUp();
@@ -225,19 +267,85 @@ const vscode = acquireVsCodeApi();
             
             function addChatMessage(message, sender) {
                 const chatHistory = document.getElementById('chatHistory');
-                const messageDiv = document.createElement('div');
-                messageDiv.className = `chat-message ${sender}`;
-                messageDiv.textContent = message;
                 
-                // Make assistant messages selectable for follow-up questions
-                if (sender === 'assistant') {
-                    messageDiv.style.userSelect = 'text';
-                    messageDiv.style.cursor = 'text';
-                    messageDiv.title = 'Select text to add to follow-up question';
+                if (sender === 'user') {
+                    // For user messages, we'll store the question for the upcoming response
+                    window.lastUserQuestion = message;
+                } else if (sender === 'assistant') {
+                    // Create accordion item for assistant response
+                    addChatAccordionItem(window.lastUserQuestion || 'Follow-up Question', message);
+                    window.lastUserQuestion = null; // Clear after use
                 }
                 
-                chatHistory.appendChild(messageDiv);
                 chatHistory.scrollTop = chatHistory.scrollHeight;
+            }
+            
+            function addChatAccordionItem(question, response) {
+                const chatHistory = document.getElementById('chatHistory');
+                const timestamp = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                
+                // Create accordion item
+                const chatItem = document.createElement('div');
+                chatItem.className = 'chat-item';
+                
+                // Create header (clickable to toggle)
+                const header = document.createElement('div');
+                header.className = 'chat-item-header';
+                
+                const questionSpan = document.createElement('span');
+                questionSpan.className = 'chat-question';
+                questionSpan.textContent = `${question} (${timestamp})`;
+                
+                const toggleSpan = document.createElement('span');
+                toggleSpan.className = 'chat-toggle';
+                toggleSpan.textContent = '▼';
+                
+                header.appendChild(questionSpan);
+                header.appendChild(toggleSpan);
+                
+                // Create content (initially hidden)
+                const content = document.createElement('div');
+                content.className = 'chat-item-content';
+                
+                const responseDiv = document.createElement('div');
+                responseDiv.className = 'chat-response';
+                responseDiv.textContent = response;
+                
+                // Make response selectable for follow-up questions
+                responseDiv.style.userSelect = 'text';
+                responseDiv.style.cursor = 'text';
+                responseDiv.title = 'Select text to add to follow-up question';
+                
+                content.appendChild(responseDiv);
+                
+                // Add click handler for accordion toggle
+                header.addEventListener('click', function() {
+                    const isExpanded = content.classList.contains('expanded');
+                    
+                    if (isExpanded) {
+                        // Collapse
+                        content.classList.remove('expanded');
+                        header.classList.remove('expanded');
+                        toggleSpan.classList.remove('expanded');
+                        content.style.display = 'none';
+                    } else {
+                        // Expand
+                        content.classList.add('expanded');
+                        header.classList.add('expanded');
+                        toggleSpan.classList.add('expanded');
+                        content.style.display = 'block';
+                    }
+                });
+                
+                // Assemble and add to chat history
+                chatItem.appendChild(header);
+                chatItem.appendChild(content);
+                chatHistory.appendChild(chatItem);
+                
+                // Auto-expand the latest item
+                setTimeout(() => {
+                    header.click();
+                }, 100);
             }
             
             // Handle text selection for follow-up questions
@@ -330,49 +438,78 @@ const vscode = acquireVsCodeApi();
                     case 'showLoading':
                         showLoading();
                         break;
-                    case 'showResponse':
-                        clearLoading(); // Clear loading state and request flag
-                        
-                        const responseArea = document.getElementById('responseArea');
-                        let responseTitle = document.getElementById('responseTitle');
-                        let responseContent = document.getElementById('responseContent');
-                        if (!responseTitle || !responseContent) {
-                            responseArea.innerHTML = '<h3 id="responseTitle"></h3><div id="responseContent"></div>';
-                            responseTitle = document.getElementById('responseTitle');
-                            responseContent = document.getElementById('responseContent');
-                        }
-                        responseTitle.textContent = message.levelTitle + ' Response';
-                        responseContent.textContent = message.response || '';
-                        responseContent.style.whiteSpace = 'pre-wrap';
-                        responseContent.style.userSelect = 'text';
-                        responseContent.style.cursor = 'text';
-                        responseContent.title = 'Select text to add to follow-up question';
-                        if (responseArea) responseArea.classList.add('show');
-                        
-                        // Show copy to file button
-                        const copyBtn = document.getElementById('copyToFileBtn');
-                        if (copyBtn) {
-                            copyBtn.style.display = 'block';
-                        }
-                        
-                        // Show chat interface
-                        document.getElementById('chatInterface').classList.add('show');
-                        
-                        // Unlock next level if available
-                        const levels = ['concept', 'how', 'code'];
-                        const currentIndex = levels.indexOf(message.level);
-                        if (currentIndex >= 0) {
-                            unlockNextLevel(currentIndex);
-                        }
-                        break;
+                     case 'showResponse':
+                         clearLoading(); // Clear loading state and request flag
+                         
+                         // Update the main response area (original functionality)
+                         const responseArea = document.getElementById('responseArea');
+                         let responseTitle = document.getElementById('responseTitle');
+                         let responseContent = document.getElementById('responseContent');
+                         if (!responseTitle || !responseContent) {
+                             responseArea.innerHTML = '<h3 id="responseTitle"></h3><div id="responseContent"></div>';
+                             responseTitle = document.getElementById('responseTitle');
+                             responseContent = document.getElementById('responseContent');
+                         }
+                         responseTitle.textContent = message.levelTitle + ' Response';
+                         responseContent.textContent = message.response || '';
+                         responseContent.style.whiteSpace = 'pre-wrap';
+                         responseContent.style.userSelect = 'text';
+                         responseContent.style.cursor = 'text';
+                         responseContent.title = 'Select text to add to follow-up question';
+                         if (responseArea) responseArea.classList.add('show');
+                         
+                         // Show main copy to file button
+                         const copyBtn = document.getElementById('copyToFileBtn');
+                         if (copyBtn) {
+                             copyBtn.style.display = 'block';
+                         }
+                         
+                         // ALSO update the individual level dropdown (new functionality)
+                         const level = message.level;
+                         const levelResponseArea = document.getElementById(`response-${level}`);
+                         const levelContent = document.getElementById(`content-${level}`);
+                         const levelCopyBtn = document.getElementById(`copy-${level}`);
+                         const levelArrow = document.getElementById(`arrow-${level}`);
+                         
+                         if (levelContent && levelResponseArea) {
+                             // Populate the level-specific content area with exact same formatting as main area
+                             levelContent.textContent = message.response || '';
+                             levelContent.style.whiteSpace = 'pre-wrap';
+                             levelContent.style.userSelect = 'text';
+                             levelContent.style.cursor = 'text';
+                             levelContent.style.lineHeight = '1.6';
+                             levelContent.style.color = 'var(--text-primary)';
+                             levelContent.title = 'Select text to add to follow-up question';
+                             
+                             // Show the arrow but keep dropdown collapsed
+                             levelResponseArea.style.display = 'none'; // Start collapsed
+                             if (levelArrow) {
+                                 levelArrow.style.display = 'inline';
+                                 levelArrow.classList.remove('expanded'); // Start with arrow pointing down
+                             }
+                             
+                             // Show copy to file button for this level
+                             if (levelCopyBtn) levelCopyBtn.style.display = 'block';
+                         }
+                         
+                         // Show chat interface
+                         document.getElementById('chatInterface').classList.add('show');
+                         
+                         // Unlock next level if available
+                         const levels = ['concept', 'how', 'code'];
+                         const currentIndex = levels.indexOf(message.level);
+                         if (currentIndex >= 0) {
+                             unlockNextLevel(currentIndex);
+                         }
+                         break;
                     case 'markCompleted':
-                        // Grey out and disable the completed level button
+                        // Mark as completed but keep clickable for accordion functionality
                         (function(){
                             const id = message.level;
                             const btn = document.getElementById('level-' + id);
                             if (btn) {
-                                btn.classList.add('disabled');
-                                btn.onclick = null;
+                                // Don't add 'disabled' class - keep it clickable for accordion
+                                btn.classList.add('completed');
                                 const statusSpan = btn.querySelector('.level-status');
                                 if (statusSpan) {
                                     statusSpan.textContent = 'DONE';
@@ -383,13 +520,28 @@ const vscode = acquireVsCodeApi();
                         break;
                     case 'showFollowUpResponse':
                         clearLoading(); // Clear loading state and request flag
-                        // Remove the "Thinking..." message and add the real response
+                        // Replace the "Thinking..." accordion item with the real response
                         const chatHistory = document.getElementById('chatHistory');
-                        const lastMessage = chatHistory.lastElementChild;
-                        if (lastMessage && lastMessage.textContent === 'Thinking...') {
-                            lastMessage.remove();
+                        const lastAccordionItem = chatHistory.lastElementChild;
+                        
+                        if (lastAccordionItem && lastAccordionItem.classList.contains('chat-item')) {
+                            const responseDiv = lastAccordionItem.querySelector('.chat-response');
+                            if (responseDiv && responseDiv.textContent === 'Thinking...') {
+                                // Update the response content
+                                responseDiv.textContent = message.response;
+                                // Make sure it's expanded to show the new response
+                                const content = lastAccordionItem.querySelector('.chat-item-content');
+                                const header = lastAccordionItem.querySelector('.chat-item-header');
+                                const toggle = lastAccordionItem.querySelector('.chat-toggle');
+                                
+                                if (content && header && toggle) {
+                                    content.classList.add('expanded');
+                                    header.classList.add('expanded');
+                                    toggle.classList.add('expanded');
+                                    content.style.display = 'block';
+                                }
+                            }
                         }
-                        addChatMessage(message.response, 'assistant');
                         break;
                     case 'showError':
                         clearLoading(); // Clear loading state and request flag

@@ -436,22 +436,22 @@ User's current code: {user_code}
 THIRD LEVEL HINTING - CODE WITH BLANKS:
 - Each hint must start with "<number>. CODE:"
 - Provide real {programming_language} syntax (not pseudocode, not descriptions).
-- Insert blanks strictly using bracketed ALL-CAPS placeholders like [FUNCTION_NAME], [PARAM1], [CONDITION], [INDEX], [PLAYER], etc.
-- If you include suggested example literal text, also put it in ALL-CAPS brackets, e.g., [HELLO WORLD].
+- Insert blanks using descriptive bracketed placeholders like [INSERT FUNCTION_NAME], [INSERT PARAMETER], [INSERT CONDITION], [INSERT INDEX], [INSERT PLAYER_SYMBOL], etc.
+- Make placeholders clear about what the user should insert, e.g., [INSERT ERROR_MESSAGE], [INSERT PROMPT_TEXT].
 - The code should be as close as possible to the final working solution, but incomplete in small places.
 - After each CODE block, add an EXPLANATION section with 2-3 short lines describing what the code does and how to fill placeholders.
 
 Example output format:
 {start_comment}
-1. CODE: print("[HELLO WORLD]")
+1. CODE: print("[INSERT GREETING_MESSAGE]")
 EXPLANATION:
 - Prints a greeting to the console.
-- Replace [HELLO WORLD] with the text you want to show.
+- Replace [INSERT GREETING_MESSAGE] with the text you want to show.
 
-2. CODE: def [FUNCTION_NAME]([PARAM1]): print("Hello, " + [PARAM1])
+2. CODE: def [INSERT FUNCTION_NAME]([INSERT PARAMETER_NAME]): print("Hello, " + [INSERT PARAMETER_NAME])
 EXPLANATION:
 - Defines a function and uses the parameter in a message.
-- Replace [FUNCTION_NAME] and [PARAM1] with meaningful names.
+- Replace [INSERT FUNCTION_NAME] and [INSERT PARAMETER_NAME] with meaningful names.
 {end_comment}"""
 
     try:
