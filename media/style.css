@@ -29,11 +29,7 @@
     --code-text: #d4d4d4;
 }
 
-* {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-}
+* { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -132,6 +128,10 @@ body {
     background: var(--bg-tertiary);
 }
 
+.level-button:not(.disabled) {
+    cursor: pointer;
+}
+
 .level-info {
     display: flex;
     align-items: center;
@@ -179,15 +179,8 @@ body {
 }
 
 @keyframes slideIn {
-    from {
-        opacity: 0;
-        transform: translateY(20px);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
 .chat-interface {
@@ -279,13 +272,8 @@ body {
 }
 
 @keyframes spin {
-    0% {
-        transform: rotate(0deg);
-    }
-
-    100% {
-        transform: rotate(360deg);
-    }
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
 }
 
 .error-message {
@@ -300,4 +288,36 @@ body {
 .error-message.show {
     display: block;
     animation: slideIn 0.3s ease;
+}
+
+.copy-to-file-btn {
+    background: var(--success);
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    margin: 16px 0;
+    width: 100%;
+    max-width: 300px;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.copy-to-file-btn:hover {
+    background: #218838;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
+
+.copy-to-file-btn:active {
+    transform: translateY(0);
+}
+
+.copy-to-file-btn:disabled {
+    background: var(--text-muted);
+    cursor: not-allowed;
+    transform: none;
 }

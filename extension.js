@@ -1,5 +1,4 @@
 const vscode = require('vscode');
-const axios = require('axios');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -60,14 +59,14 @@ function activate(context) {
       if (!question) return;
 
       userProgress.currentQuestion = question;
-      showLearningInterface(context, selectedText, question, editor);
+      showLearningInterface(selectedText, question, editor);
     });
   });
 
   context.subscriptions.push(disposable);
 }
 
-function showLearningInterface(context, selectedText, question, editor) {
+function showLearningInterface(selectedText, question, editor) {
   console.log('Creating enhanced webview panel');
   const panel = vscode.window.createWebviewPanel(
     'learnsor',
@@ -76,15 +75,11 @@ function showLearningInterface(context, selectedText, question, editor) {
     {
       enableScripts: true,
       retainContextWhenHidden: true,
-      localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')],
+      localResourceRoots: [vscode.Uri.file(path.join(__dirname, 'media'))]
     }
   );
 
-  panel.webview.html = getEnhancedInterfaceHtml(
-    panel.webview,
-    context.extensionUri,
-    selectedText, 
-    question);
+  panel.webview.html = getEnhancedInterfaceHtml(selectedText, question, panel.webview);
 
   // Handle messages from webview
   panel.webview.onDidReceiveMessage(function(message) {
@@ -96,6 +91,9 @@ function showLearningInterface(context, selectedText, question, editor) {
         break;
       case 'askFollowUp':
         handleFollowUpQuestion(message.question, selectedText, editor, panel);
+        break;
+      case 'copyToFile':
+        handleCopyToFile(message.text, editor, panel);
         break;
       case 'toggleTheme':
         // Theme toggle handled in webview
@@ -109,96 +107,44 @@ function handleLevelRequest(requestedLevel, selectedText, question, editor, pane
   const levelIndex = LEARNING_LEVELS.findIndex(l => l.id === requestedLevel);
   const currentTime = Date.now();
   
-  // First check: Is a request already in progress?
+  // Check if request already in progress
   if (isRequestInFlight) {
-    console.log('Request blocked: already in progress');
     panel.webview.postMessage({
       command: 'showError',
       message: 'A request is already in progress. Please wait for it to complete.'
     });
-    // Clear any loading state
-    panel.webview.postMessage({
-      command: 'showResponse',
-      level: requestedLevel,
-      levelTitle: 'Request Blocked',
-      response: 'A request is already in progress. Please wait for it to complete.',
-      canProceed: false
-    });
     return;
   }
   
-  // Second check: Level access and timing validation
+  // Level access and timing validation
   if (levelIndex > userProgress.currentLevel) {
     const lastLevelTime = userProgress.levelTimestamps[userProgress.currentLevel];
     if (lastLevelTime && (currentTime - lastLevelTime) < 60000) {
       const waitTime = Math.ceil((60000 - (currentTime - lastLevelTime)) / 1000);
-      console.log(`Request blocked: must wait ${waitTime} more seconds`);
       panel.webview.postMessage({
         command: 'showError',
         message: `Please wait ${waitTime} more seconds before accessing the next level. Learn progressively! 🎓`
-      });
-      // Clear any loading state that might have been set
-      panel.webview.postMessage({
-        command: 'showResponse',
-        level: requestedLevel,
-        levelTitle: 'Request Blocked',
-        response: `Please wait ${waitTime} more seconds before accessing the next level.`,
-        canProceed: false
       });
       return;
     }
   }
 
-  // Third check: Can user access current level? (allow re-requests of completed levels)
-  if (levelIndex < userProgress.currentLevel) {
-    // Allow re-accessing previous levels
-    console.log('Allowing re-access to previous level:', requestedLevel);
-  } else if (levelIndex === userProgress.currentLevel) {
-    // Allow current level
-    console.log('Allowing access to current level:', requestedLevel);
-  } else if (levelIndex === userProgress.currentLevel + 1) {
-    // Allow next level (timing already checked above)
-    console.log('Allowing access to next level:', requestedLevel);
-  } else {
-    // Block access to levels too far ahead
-    console.log('Request blocked: level too far ahead');
-    panel.webview.postMessage({
-      command: 'showError',
-      message: 'Please complete the previous levels first.'
-    });
-    // Clear any loading state
-    panel.webview.postMessage({
-      command: 'showResponse',
-      level: requestedLevel,
-      levelTitle: 'Request Blocked',
-      response: 'Please complete the previous levels first.',
-      canProceed: false
-    });
-    return;
-  }
-
   // All checks passed - proceed with request
   const language = getLanguageFromUri(editor.document.uri);
-  console.log('All checks passed, sending loading message to webview');
   
   panel.webview.postMessage({
     command: 'showLoading',
     level: requestedLevel
   });
-
-  console.log('Calling generateEducationalResponse...');
   
-  // Set request in flight AFTER loading message but BEFORE the async call
   isRequestInFlight = true;
   
   generateEducationalResponse(selectedText, question, requestedLevel, language)
     .then(function(response) {
-      console.log('Got response, sending to webview');
-      // Update progress only if this is a new or current level
+      // Update progress
       if (levelIndex >= userProgress.currentLevel) {
         userProgress.currentLevel = levelIndex;
         userProgress.levelTimestamps[levelIndex] = currentTime;
-        console.log('Updated progress to level:', levelIndex);
       }
 
       panel.webview.postMessage({
@@ -209,53 +155,39 @@ function handleLevelRequest(requestedLevel, selectedText, question, editor, pane
         canProceed: levelIndex < LEARNING_LEVELS.length - 1
       });
 
-      // Visually mark the completed level as done and disable it
-      try {
-        const levelIds = ['concept', 'how', 'code'];
-        const completedId = levelIds[levelIndex];
-        panel.webview.postMessage({
-          command: 'markCompleted',
-          level: completedId
-        });
-      } catch (e) {
-        console.error('Error marking level completed:', e);
-      }
+      panel.webview.postMessage({
+        command: 'markCompleted',
+        level: requestedLevel
+      });
     })
     .catch(function(error) {
-      console.log('Error in generateEducationalResponse:', error);
       panel.webview.postMessage({
         command: 'showError',
         message: error.message || 'Unknown error occurred'
       });
-      // Clear loading state on error
-      panel.webview.postMessage({
-        command: 'showResponse',
-        level: requestedLevel,
-        levelTitle: 'Error',
-        response: 'Request failed. Please try again.',
-        canProceed: false
-      });
     })
     .finally(function() {
-      // Always clear the request flag
       isRequestInFlight = false;
-      console.log('Request completed, cleared isRequestInFlight flag');
     });
 }
 
 function handleFollowUpQuestion(followUpQuestion, selectedText, editor, panel) {
-  const language = getLanguageFromUri(editor.document.uri);
-  const currentLevelId = LEARNING_LEVELS[userProgress.currentLevel].id;
-  
-  panel.webview.postMessage({
-    command: 'showLoading',
-    level: 'followup'
-  });
+  const followUpPrompt = `This is a casual follow-up question, NOT a structured learning exercise.
 
-  // Add instruction for shorter responses to follow-up questions
-  const enhancedQuestion = `${followUpQuestion}\n\n[Keep response short and focused - 3-4 sentences maximum]`;
+User asked: "${followUpQuestion}"
 
-  generateEducationalResponse(selectedText, enhancedQuestion, currentLevelId, language)
+Respond in plain text as if you're casually chatting with a friend. Give a brief, general answer (2-3 sentences) that's not tied to any specific project. End with a simple question if helpful.
+
+ABSOLUTELY FORBIDDEN:
+- Any structured formats (CONCEPT, WHY, HOW, etc.)
+- Numbered lists or bullet points  
+- Comment blocks or code formatting
+- Reference to specific projects unless directly asked
+- Educational lesson structure
+
+This should read like a normal text message conversation. Be helpful but casual and general.`;
+
+  generateFollowUpResponse(followUpPrompt)
     .then(function(response) {
       panel.webview.postMessage({
         command: 'showFollowUpResponse',
@@ -270,108 +202,167 @@ function handleFollowUpQuestion(followUpQuestion, selectedText, editor, panel) {
     });
 }
 
+function handleCopyToFile(textToCopy, editor, panel) {
+  try {
+    const language = getLanguageFromUri(editor.document.uri);
+    const processedText = extractAndConvertCommentBlock(textToCopy, language);
+    
+    const position = editor.selection.active;
+    
+    editor.edit(editBuilder => {
+      editBuilder.insert(position, processedText);
+    }).then(success => {
+      if (success) {
+        panel.webview.postMessage({
+          command: 'showCopySuccess',
+          message: '✓ Comment block copied to file!'
+        });
+        vscode.window.showTextDocument(editor.document);
+      } else {
+        panel.webview.postMessage({
+          command: 'showError',
+          message: 'Failed to copy text to file'
+        });
+      }
+    });
+  } catch (error) {
+    panel.webview.postMessage({
+      command: 'showError',
+      message: 'Error copying to file: ' + error.message
+    });
+  }
+}
+
+function extractAndConvertCommentBlock(text, targetLanguage) {
+  let commentContent = '';
+  
+  // Look for various comment block patterns
+  const pythonBlockRegex = /"""([\s\S]*?)"""/g;
+  const cStyleBlockRegex = /\/\*([\s\S]*?)\*\//g;
+  
+  let match = pythonBlockRegex.exec(text);
+  if (match) {
+    commentContent = match[1].trim();
+  } else {
+    match = cStyleBlockRegex.exec(text);
+    if (match) {
+      commentContent = match[1].trim();
+    }
+  }
+  
+  if (!commentContent) {
+    const lines = text.split('\n');
+    const conceptLines = lines.filter(line => 
+      line.trim().match(/^\d+\.\s*(CONCEPT|WHY|HOW|CODE):/i)
+    );
+    
+    if (conceptLines.length > 0) {
+      commentContent = conceptLines.join('\n').trim();
+    } else {
+      const beforeExplanation = text.split(/These foundational|Would you like|For your|Note:/i)[0];
+      commentContent = beforeExplanation.trim();
+    }
+  }
+  
+  return convertToCommentSyntax(commentContent, targetLanguage);
+}
+
+function convertToCommentSyntax(content, targetLanguage) {
+  const langLower = targetLanguage.toLowerCase();
+  
+  switch (langLower) {
+    case 'python':
+      return `\n"""\n${content}\n"""\n`;
+    case 'javascript':
+    case 'typescript':
+    case 'java':
+    case 'cpp':
+    case 'c++':
+    case 'c':
+    case 'cs':
+    case 'c#':
+    case 'rust':
+    case 'go':
+    case 'php':
+    case 'swift':
+      return `\n/*\n${content}\n*/\n`;
+    case 'ruby':
+      return `\n=begin\n${content}\n=end\n`;
+    case 'html':
+      return `\n<!--\n${content}\n-->\n`;
+    case 'css':
+      return `\n/*\n${content}\n*/\n`;
+    default:
+      return `\n/*\n${content}\n*/\n`;
+  }
+}
+
+function getLanguageFromUri(uri) {
+  const parts = uri.fsPath.split('.');
+  const ext = parts[parts.length - 1];
+  if (!ext) return 'code';
+  
+  const extLower = ext.toLowerCase();
+  const langMap = {
+    'js': 'JavaScript', 'ts': 'TypeScript', 'py': 'Python',
+    'java': 'Java', 'cpp': 'C++', 'cs': 'C#', 'c': 'C',
+    'html': 'HTML', 'css': 'CSS', 'php': 'PHP', 'rb': 'Ruby'
+  };
+  return langMap[extLower] || 'code';
+}
+
 function generateEducationalResponse(code, question, level, language) {
-  // Route through Python api_client to use the 3-level system
   return new Promise(function(resolve, reject) {
     const activeEditor = vscode.window.activeTextEditor;
     let workspaceRoot = null;
     
-    // Try multiple methods to find the workspace root
     const folders = vscode.workspace.workspaceFolders;
     
-    // Method 1: Use workspace folders
     if (folders && folders.length > 0) {
       for (const folder of folders) {
         if (folder.uri && folder.uri.fsPath) {
           const wsPath = folder.uri.fsPath;
-          console.log('Checking workspace folder:', wsPath);
           if (fs.existsSync(path.join(wsPath, 'api_client.py'))) {
             workspaceRoot = wsPath;
-            console.log('Found api_client.py in workspace folder:', workspaceRoot);
             break;
           }
         }
       }
     }
     
-    // Method 2: Use active editor file path
     if (!workspaceRoot && activeEditor && activeEditor.document && activeEditor.document.uri) {
       const filePath = activeEditor.document.uri.fsPath;
-      console.log('Active file path:', filePath);
       let testDir = path.dirname(filePath);
       
-      // Search up the directory tree
       for (let i = 0; i < 10; i++) {
-        console.log('Checking directory:', testDir);
         if (fs.existsSync(path.join(testDir, 'api_client.py'))) {
           workspaceRoot = testDir;
-          console.log('Found api_client.py at:', workspaceRoot);
           break;
         }
         const parentDir = path.dirname(testDir);
-        if (parentDir === testDir) break; // reached root
+        if (parentDir === testDir) break;
         testDir = parentDir;
       }
     }
     
-    // Method 3: Direct hardcoded check for known location
     if (!workspaceRoot) {
       const knownPaths = [
         'C:\\Users\\ericl\\LearnSor\\LearnSor',
         path.join(process.cwd(), 'LearnSor'),
-        process.cwd(),
-        __dirname,
-        path.join(__dirname, '..')
+        process.cwd()
       ];
       
       for (const testPath of knownPaths) {
-        console.log('Checking known path:', testPath);
         if (fs.existsSync(testPath) && fs.existsSync(path.join(testPath, 'api_client.py'))) {
           workspaceRoot = testPath;
-          console.log('Found api_client.py at known path:', workspaceRoot);
           break;
         }
       }
     }
     
-    // If still not found, try ascending from process.cwd() and __dirname for a few levels
-    const searched = [];
     if (!workspaceRoot) {
-      const rootsToTry = [];
-      if (folders && folders.length > 0) rootsToTry.push(...folders.map(f => f.uri.fsPath));
-      if (activeEditor && activeEditor.document && activeEditor.document.uri) rootsToTry.push(path.dirname(activeEditor.document.uri.fsPath));
-      rootsToTry.push(process.cwd());
-      rootsToTry.push(__dirname);
-
-      for (const start of rootsToTry) {
-        if (!start) continue;
-        let testDir = start;
-        for (let i = 0; i < 6; i++) {
-          const candidate = path.join(testDir, 'api_client.py');
-          searched.push(candidate);
-          if (fs.existsSync(candidate)) {
-            workspaceRoot = testDir;
-            console.log('Found api_client.py at:', workspaceRoot);
-            break;
-          }
-          const parent = path.dirname(testDir);
-          if (!parent || parent === testDir) break;
-          testDir = parent;
-        }
-        if (workspaceRoot) break;
-      }
+      return reject(new Error('Could not find api_client.py. Make sure it exists in the workspace root.'));
     }
-
-    if (!workspaceRoot) {
-      const folderPaths = (folders || []).map(f => f.uri && f.uri.fsPath).filter(Boolean);
-      console.error('Failed to find api_client.py. Searched locations (examples):');
-      console.error('- Workspace folders:', folderPaths);
-      console.error('- Active file path:', activeEditor && activeEditor.document && activeEditor.document.uri && activeEditor.document.uri.fsPath);
-      console.error('- Additional candidates tried:', searched.slice(0, 20));
-      return reject(new Error('Could not find api_client.py. Make sure it exists in the workspace root (or in a parent directory). Searched these candidates: ' + JSON.stringify(searched.slice(0,20))));
-    }
-    
-    console.log('Using workspace root:', workspaceRoot);
 
     const filename = (activeEditor && activeEditor.document && activeEditor.document.fileName)
       ? path.basename(activeEditor.document.fileName)
@@ -393,84 +384,29 @@ function generateEducationalResponse(code, question, level, language) {
     ].join('; ');
 
     const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
-    let child = null;
-    let killedByTimeout = false;
-
-    function attachHandlers(proc) {
+    
+    try {
+      const child = spawn(pythonCmd, ['-c', pySnippet], { cwd: workspaceRoot, env: process.env });
+      
       let stdout = '';
       let stderr = '';
-
-      proc.stdout.on('data', function(data) { stdout += data.toString(); });
-      proc.stderr.on('data', function(data) { stderr += data.toString(); });
-
-      const KILL_MS = 45000;
-      const killTimer = setTimeout(function() {
-        killedByTimeout = true;
-        try { proc.kill(); } catch (e) {}
-      }, KILL_MS);
-
-      proc.on('error', function(err) {
-        clearTimeout(killTimer);
-        // Fallback to 'py -3' on Windows if python not found
-        if (process.platform === 'win32' && err.code === 'ENOENT') {
-          try {
-            const fallback = spawn('py', ['-3', '-c', pySnippet], { cwd: workspaceRoot || process.cwd(), env: process.env });
-            attachHandlers(fallback);
-            // resend payload on fallback
-            fallback.stdin.write(JSON.stringify({
-              code: code,
-              task: question,
-              filename: filename,
-              project_path: workspaceRoot,
-              active_file_path: activeFilePath,
-              target_level: (function(){
-                switch (level) {
-                  case 'concept': return 'level1';
-                  case 'how': return 'level2';
-                  case 'code': return 'level3';
-                  default: return 'level1';
-                }
-              })()
-            }));
-            fallback.stdin.end();
-            return;
-          } catch (e2) {
-            return reject(new Error('Failed to start Python (fallback): ' + e2.message));
-          }
+      
+      child.stdout.on('data', function(data) { stdout += data.toString(); });
+      child.stderr.on('data', function(data) { stderr += data.toString(); });
+      
+      child.on('close', function(code) {
+        if (code !== 0) {
+          return reject(new Error('Python exited with code ' + code + (stderr ? (': ' + stderr) : '')));
         }
-        reject(new Error('Failed to start Python: ' + err.message));
-      });
-
-      proc.on('close', function(codeExit) {
-        clearTimeout(killTimer);
-        if (killedByTimeout) {
-          return reject(new Error('Python timed out after 45s'));
-        }
-        if (codeExit !== 0) {
-          return reject(new Error('Python exited with code ' + codeExit + (stderr ? (': ' + stderr) : '')));
-        }
+        
         try {
           const parsed = JSON.parse(stdout || '{}');
-          switch (level) {
-            case 'logical':
-            case 'pseudocode':
-              resolve(parsed.level1 || parsed.combined || 'No Level 1 output');
-              break;
-            case 'functions':
-              resolve(parsed.level2 || 'No Level 2 output');
-              break;
-            case 'snippet':
-              resolve(parsed.level3 || 'No Level 3 output');
-              break;
-            default:
-              resolve(parsed.combined || parsed.level1 || 'No output');
-          }
+          resolve(parsed.combined || parsed.level1 || 'No output');
         } catch (e) {
-          reject(new Error('Failed to parse Python output: ' + e.message + (stdout ? (' | OUT: ' + stdout) : '') + (stderr ? (' | ERR: ' + stderr) : '')));
+          reject(new Error('Failed to parse Python output: ' + e.message));
         }
       });
-
-      // Send params to Python via stdin
+      
       const payload = {
         code: code,
         task: question,
@@ -486,74 +422,202 @@ function generateEducationalResponse(code, question, level, language) {
           }
         })()
       };
-      try {
-        proc.stdin.write(JSON.stringify(payload));
-        proc.stdin.end();
-      } catch (e) {
-        reject(new Error('Failed to write to Python stdin: ' + e.message));
-      }
-    }
-
-    try {
-      child = spawn(pythonCmd, ['-c', pySnippet], { cwd: workspaceRoot || process.cwd(), env: process.env });
-      attachHandlers(child);
+      
+      child.stdin.write(JSON.stringify(payload));
+      child.stdin.end();
+      
     } catch (e) {
-      // Fallback immediate attempt
-      if (process.platform === 'win32') {
-        try {
-          child = spawn('py', ['-3', '-c', pySnippet], { cwd: workspaceRoot || process.cwd(), env: process.env });
-          attachHandlers(child);
-        } catch (e2) {
-          reject(new Error('Failed to start Python: ' + e2.message));
-        }
-        } else {
-        reject(new Error('Failed to start Python: ' + e.message));
-      }
-        }
+      reject(new Error('Failed to start Python: ' + e.message));
+    }
   });
 }
 
-function getLanguageFromUri(uri) {
-  const parts = uri.fsPath.split('.');
-  const ext = parts[parts.length - 1];
-  if (!ext) return 'code';
+function generateFollowUpResponse(prompt) {
+  return new Promise(function(resolve, reject) {
+    const folders = vscode.workspace.workspaceFolders;
+    let workspaceRoot = null;
+    
+    if (folders && folders.length > 0) {
+      for (const folder of folders) {
+        if (folder.uri && folder.uri.fsPath) {
+          const wsPath = folder.uri.fsPath;
+          if (fs.existsSync(path.join(wsPath, '.env'))) {
+            workspaceRoot = wsPath;
+            break;
+          }
+        }
+      }
+    }
+    
+    if (!workspaceRoot) {
+      workspaceRoot = process.cwd();
+    }
+
+    const pySnippet = `
+import sys, json, os
+from dotenv import load_dotenv
+import anthropic
+
+params = json.loads(sys.stdin.read())
+proj = params.get("project_path", ".")
+env_path = os.path.join(proj, ".env")
+
+if os.path.exists(env_path):
+    load_dotenv(dotenv_path=env_path)
+else:
+    load_dotenv()
+
+api_key = os.getenv("ANTHROPIC_API_KEY")
+
+if not api_key:
+    raise ValueError("ANTHROPIC_API_KEY not found in environment")
+
+client = anthropic.Anthropic(api_key=api_key)
+prompt = params.get("task", "")
+
+response = client.messages.create(
+    model="claude-3-5-sonnet-20241022",
+    max_tokens=300,
+    temperature=0.7,
+    messages=[{"role": "user", "content": prompt}]
+)
+
+result = response.content[0].text
+print(json.dumps({"response": result}))
+`;
+
+    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+    
+    try {
+      const child = spawn(pythonCmd, ['-c', pySnippet], { cwd: workspaceRoot, env: process.env });
+      
+      let stdout = '';
+      let stderr = '';
+      
+      child.stdout.on('data', function(data) { stdout += data.toString(); });
+      child.stderr.on('data', function(data) { stderr += data.toString(); });
+      
+      child.on('close', function(code) {
+        if (code !== 0) {
+          return reject(new Error('Python exited with code ' + code + (stderr ? (': ' + stderr) : '')));
+        }
+        
+        try {
+          const parsed = JSON.parse(stdout || '{}');
+          let response = parsed.response || 'No response';
+          
+          response = response.replace(/^\s*"""\s*/g, '').replace(/\s*"""\s*$/g, '');
+          response = response.replace(/^\s*\/\*\s*/g, '').replace(/\s*\*\/\s*$/g, '');
+          response = response.replace(/^\d+\.\s*CONCEPT:/gm, '');
+          response = response.replace(/^\s*WHY:/gm, '');
+          response = response.replace(/^\s*HOW:/gm, '');
+          response = response.trim();
+          
+          resolve(response);
+        } catch (e) {
+          reject(new Error('Failed to parse Python output: ' + e.message));
+        }
+      });
+      
+      child.stdin.write(JSON.stringify({
+        task: prompt,
+        project_path: workspaceRoot
+      }));
+      child.stdin.end();
+      
+    } catch (e) {
+      reject(new Error('Failed to start Python: ' + e.message));
+    }
+  });
+}
+
+function getEnhancedInterfaceHtml(selectedCode, question, webview) {
+  const escapedCode = selectedCode.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const escapedQuestion = question.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   
-  const extLower = ext.toLowerCase();
-  const langMap = {
-    'js': 'JavaScript', 'ts': 'TypeScript', 'py': 'Python',
-    'java': 'Java', 'cpp': 'C++', 'cs': 'C#', 'c': 'C',
-    'html': 'HTML', 'css': 'CSS', 'php': 'PHP', 'rb': 'Ruby'
-  };
-  return langMap[extLower] || 'code';
+  const mediaPath = vscode.Uri.file(path.join(__dirname, 'media'));
+  const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaPath, 'style.css'));
+  const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaPath, 'webview.js'));
+  
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>LearnSor Learning Assistant</title>
+        <link rel="stylesheet" href="${styleUri}">
+    </head>
+    <body data-theme="light">
+        <div class="container">
+            <div class="header">
+                <h1>🎓 LearnSor Learning Assistant</h1>
+                <button class="theme-toggle" onclick="toggleTheme()">🌙 Dark Mode</button>
+            </div>
+            
+            <div class="question-section">
+                <h3>Your Question:</h3>
+                <p><em>"${escapedQuestion}"</em></p>
+                <h4>Selected Code:</h4>
+                <div class="code-block">${escapedCode}</div>
+            </div>
+            
+            <div class="error-message" id="errorMessage"></div>
+            
+            <div class="learning-levels">
+                <div class="level-button available" id="level-concept" role="button" tabindex="0">
+                    <div class="level-info">
+                        <span>🧠 Concept & Why</span>
+                        <small>High-level steps and reasoning</small>
+                    </div>
+                    <span class="level-status available">START HERE</span>
+                </div>
+                
+                <div class="level-button disabled" id="level-how" role="button" tabindex="0">
+                    <div class="level-info">
+                        <span>🔧 How (Implementation Hints)</span>
+                        <small>Guided implementation ideas</small>
+                    </div>
+                    <span class="level-status locked" title="Complete the previous level first">LOCKED</span>
+                </div>
+                
+                <div class="level-button disabled" id="level-code" role="button" tabindex="0">
+                    <div class="level-info">
+                        <span>💾 Code (with blanks)</span>
+                        <small>Concrete code lines with blanks</small>
+                    </div>
+                    <span class="level-status locked" title="Complete the previous level first">LOCKED</span>
+                </div>
+            </div>
+            
+            <div class="response-area" id="responseArea">
+                <h3 id="responseTitle">Response</h3>
+                <div id="responseContent"></div>
+                <button class="copy-to-file-btn" id="copyToFileBtn" onclick="copyResponseToFile()" style="display: none;">
+                    📋 Copy Response to File
+                </button>
+            </div>
+            
+            <div class="chat-interface" id="chatInterface">
+                <h4>💬 Ask Follow-up Questions</h4>
+                <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
+                    💡 <strong>Tip:</strong> Highlight any part of the response above and click "+ Add to Question" or press Ctrl+Enter to reference it in your follow-up question.
+                </p>
+                <div class="chat-history" id="chatHistory"></div>
+                <div class="chat-input-container">
+                    <input type="text" class="chat-input" id="chatInput" placeholder="Ask a follow-up question..." onkeypress="handleChatKeyPress(event)">
+                    <button class="chat-send" onclick="sendFollowUp()">Send</button>
+                </div>
+            </div>
+        </div>
+        
+        <script src="${scriptUri}"></script>
+    </body>
+    </html>
+  `;
 }
-
-function getEnhancedInterfaceHtml(webview, extensionUri, selectedCode, question) {
-  const fs = require('fs');
-  const vscode = require('vscode');
-
-  const escapeHtml = (s='') =>
-    String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-
-  const mediaRoot    = vscode.Uri.joinPath(extensionUri, 'media');
-  const interfaceUri = vscode.Uri.joinPath(mediaRoot, 'interface.html');
-  const styleUri     = vscode.Uri.joinPath(mediaRoot, 'style.css');
-  const scriptUri    = vscode.Uri.joinPath(mediaRoot, 'ui.js');
-
-  let html = fs.readFileSync(interfaceUri.fsPath, 'utf8');
-
-  html = html
-    .replaceAll('@@STYLE@@',  webview.asWebviewUri(styleUri).toString())
-    .replaceAll('@@SCRIPT@@', webview.asWebviewUri(scriptUri).toString())
-    .replaceAll('@@QUESTION@@', escapeHtml(question || ''))
-    .replaceAll('@@CODE@@',     escapeHtml(selectedCode || ''));
-
-  return html;
-}
-
-
-function deactivate() {}
 
 module.exports = {
   activate: activate,
-  deactivate: deactivate
+  deactivate: function() {}
 };
