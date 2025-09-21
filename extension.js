@@ -247,7 +247,10 @@ function handleFollowUpQuestion(followUpQuestion, selectedText, editor, panel) {
     level: 'followup'
   });
 
-  generateEducationalResponse(selectedText, followUpQuestion, currentLevelId, language)
+  // Add instruction for shorter responses to follow-up questions
+  const enhancedQuestion = `${followUpQuestion}\n\n[Keep response short and focused - 3-4 sentences maximum]`;
+
+  generateEducationalResponse(selectedText, enhancedQuestion, currentLevelId, language)
     .then(function(response) {
       panel.webview.postMessage({
         command: 'showFollowUpResponse',
@@ -466,10 +469,10 @@ function generateEducationalResponse(code, question, level, language) {
         } catch (e2) {
           reject(new Error('Failed to start Python: ' + e2.message));
         }
-      } else {
+        } else {
         reject(new Error('Failed to start Python: ' + e.message));
       }
-    }
+        }
   });
 }
 
@@ -657,6 +660,10 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
                 color: white;
             }
             
+            .level-status[title] {
+                cursor: help;
+            }
+            
             .response-area {
                 background: var(--bg-secondary);
                 border-radius: 12px;
@@ -814,7 +821,7 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
                         <span>🔧 How (Implementation Hints)</span>
                         <small>Guided implementation ideas</small>
                     </div>
-                    <span class="level-status locked">LOCKED</span>
+                    <span class="level-status locked" title="Complete the previous level first">LOCKED</span>
                 </div>
                 
                 <div class="level-button disabled" id="level-code" role="button" tabindex="0">
@@ -822,7 +829,7 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
                         <span>💾 Code (with blanks)</span>
                         <small>Concrete code lines with blanks</small>
                     </div>
-                    <span class="level-status locked">LOCKED</span>
+                    <span class="level-status locked" title="Complete the previous level first">LOCKED</span>
                 </div>
             </div>
             
@@ -833,6 +840,9 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
             
             <div class="chat-interface" id="chatInterface">
                 <h4>💬 Ask Follow-up Questions</h4>
+                <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
+                    💡 <strong>Tip:</strong> Highlight any part of the response above and click "+ Add to Question" or press Ctrl+Enter to reference it in your follow-up question.
+                </p>
                 <div class="chat-history" id="chatHistory"></div>
                 <div class="chat-input-container">
                     <input type="text" class="chat-input" id="chatInput" placeholder="Ask a follow-up question..." onkeypress="handleChatKeyPress(event)">
@@ -867,11 +877,11 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
                 
                 const button = document.getElementById('level-' + levelId);
                 if (button && button.classList.contains('disabled')) return;
-
+                
                 webviewRequestInProgress = true;
                 showLoading();
                 vscode.postMessage({ command: 'requestLevel', level: levelId });
-
+                
                 // UI fallback if host never replies
                 const timeoutMs = 30000;
                 setTimeout(() => {
@@ -937,20 +947,21 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
                     const nextButton = document.getElementById(\`level-\${nextLevel}\`);
                     if (nextButton) {
                         // Show countdown immediately
-                        const statusSpan = nextButton.querySelector('.level-status');
+                            const statusSpan = nextButton.querySelector('.level-status');
                         let countdown = 60;
                         
                         const timer = setInterval(() => {
                             // If already unlocked somewhere else, mark READY and stop
                             if (!nextButton.classList.contains('disabled')) {
                                 clearInterval(timer);
-                                statusSpan.textContent = 'AVAILABLE';
-                                statusSpan.className = 'level-status available';
+                            statusSpan.textContent = 'AVAILABLE';
+                            statusSpan.className = 'level-status available';
                                 return;
                             }
-                            
+                        
                             if (countdown > 0) {
                                 statusSpan.textContent = \`WAIT \${countdown}s\`;
+                                statusSpan.title = 'Take time to review and understand the previous response before moving to the next level. This helps reinforce your learning!';
                                 countdown--;
                             } else {
                                 // Actually unlock the button when countdown reaches 0
@@ -958,6 +969,7 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
                                 nextButton.classList.remove('disabled');
                                 statusSpan.textContent = 'AVAILABLE';
                                 statusSpan.className = 'level-status available';
+                                statusSpan.title = 'Ready to proceed to the next level';
                             }
                         }, 1000);
                     }
@@ -981,13 +993,138 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
                 }
             }
             
+            // Add selected text to follow-up question
+            function addSelectionToFollowUp() {
+                const selection = window.getSelection();
+                const selectedText = selection.toString().trim();
+                
+                if (selectedText) {
+                    const chatInput = document.getElementById('chatInput');
+                    const currentValue = chatInput.value.trim();
+                    
+                    // Add selected text with quotes and context
+                    const quotedText = \`"\${selectedText}"\`;
+                    
+                    if (currentValue) {
+                        chatInput.value = currentValue + ' ' + quotedText + ' ';
+                    } else {
+                        chatInput.value = quotedText + ' - ';
+                    }
+                    
+                    // Focus the input and position cursor at the end
+                    chatInput.focus();
+                    chatInput.setSelectionRange(chatInput.value.length, chatInput.value.length);
+                    
+                    // Clear the selection
+                    selection.removeAllRanges();
+                    
+                    // Show a brief visual feedback
+                    const feedback = document.createElement('div');
+                    feedback.textContent = 'Added to follow-up question!';
+                    feedback.style.cssText = 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: var(--accent); color: white; padding: 8px 16px; border-radius: 4px; z-index: 9999; font-size: 14px;';
+                    document.body.appendChild(feedback);
+                    setTimeout(() => document.body.removeChild(feedback), 1500);
+                }
+            }
+            
             function addChatMessage(message, sender) {
                 const chatHistory = document.getElementById('chatHistory');
                 const messageDiv = document.createElement('div');
                 messageDiv.className = \`chat-message \${sender}\`;
                 messageDiv.textContent = message;
+                
+                // Make assistant messages selectable for follow-up questions
+                if (sender === 'assistant') {
+                    messageDiv.style.userSelect = 'text';
+                    messageDiv.style.cursor = 'text';
+                    messageDiv.title = 'Select text to add to follow-up question';
+                }
+                
                 chatHistory.appendChild(messageDiv);
                 chatHistory.scrollTop = chatHistory.scrollHeight;
+            }
+            
+            // Handle text selection for follow-up questions
+            document.addEventListener('mouseup', function(event) {
+                // Small delay to ensure selection is fully processed
+                setTimeout(() => {
+                    const selection = window.getSelection();
+                    const selectedText = selection.toString().trim();
+                    
+                    if (selectedText && selectedText.length > 3) { // Minimum 3 characters
+                        // Check if selection is within response areas
+                        if (selection.rangeCount > 0) {
+                            const range = selection.getRangeAt(0);
+                            const container = range.commonAncestorContainer;
+                            const parentElement = container.nodeType === Node.TEXT_NODE ? container.parentElement : container;
+                            
+                            // Check if selection is in response content or chat messages
+                            const isInResponse = parentElement.closest('#responseContent') || 
+                                               parentElement.closest('.chat-message.assistant');
+                            
+                            if (isInResponse) {
+                                // Show button positioned relative to selection
+                                showAddToFollowUpButton(selectedText);
+                            }
+                        }
+                    } else {
+                        // Remove button if no meaningful selection
+                        const existingBtn = document.getElementById('addToFollowUpBtn');
+                        if (existingBtn) existingBtn.remove();
+                    }
+                }, 10);
+            });
+            
+            // Handle keyboard shortcut (Ctrl+Enter) to add selection
+            document.addEventListener('keydown', function(event) {
+                if (event.ctrlKey && event.key === 'Enter') {
+                    addSelectionToFollowUp();
+                }
+            });
+            
+            function showAddToFollowUpButton(selectedText) {
+                // Remove any existing button
+                const existingBtn = document.getElementById('addToFollowUpBtn');
+                if (existingBtn) existingBtn.remove();
+                
+                // Get selection position
+                const selection = window.getSelection();
+                if (selection.rangeCount === 0) return;
+                
+                const range = selection.getRangeAt(0);
+                const rect = range.getBoundingClientRect();
+                
+                // Create floating button positioned relative to selection
+                const btn = document.createElement('button');
+                btn.id = 'addToFollowUpBtn';
+                btn.innerHTML = '+ Add to Question';
+                btn.style.cssText = \`
+                    position: fixed;
+                    top: \${rect.bottom + 5}px;
+                    left: \${rect.left + (rect.width / 2) - 60}px;
+                    background: var(--accent);
+                    color: white;
+                    border: none;
+                    padding: 6px 10px;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    z-index: 9999;
+                    font-size: 11px;
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+                    white-space: nowrap;
+                \`;
+                
+                btn.onclick = function() {
+                    addSelectionToFollowUp();
+                    btn.remove();
+                };
+                
+                document.body.appendChild(btn);
+                
+                // Auto-remove after 4 seconds
+                setTimeout(() => {
+                    if (btn.parentNode) btn.remove();
+                }, 4000);
             }
             
             // Listen for messages from extension
@@ -1011,6 +1148,9 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
                         responseTitle.textContent = message.levelTitle + ' Response';
                         responseContent.textContent = message.response || '';
                         responseContent.style.whiteSpace = 'pre-wrap';
+                        responseContent.style.userSelect = 'text';
+                        responseContent.style.cursor = 'text';
+                        responseContent.title = 'Select text to add to follow-up question';
                         responseArea.classList.add('show');
                         
                         // Show chat interface
