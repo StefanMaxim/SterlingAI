@@ -241,7 +241,7 @@ function handleCopyToFile(textToCopy, editor, panel) {
 function extractAndConvertCommentBlock(text, targetLanguage) {
   let commentContent = '';
   
-  // Look for various comment block patterns
+  // Look for various comment block patterns first
   const pythonBlockRegex = /"""([\s\S]*?)"""/g;
   const cStyleBlockRegex = /\/\*([\s\S]*?)\*\//g;
   
@@ -255,16 +255,41 @@ function extractAndConvertCommentBlock(text, targetLanguage) {
     }
   }
   
+  // If no comment block found, extract structured content more intelligently
   if (!commentContent) {
     const lines = text.split('\n');
-    const conceptLines = lines.filter(line => 
-      line.trim().match(/^\d+\.\s*(CONCEPT|WHY|HOW|CODE):/i)
-    );
+    let structuredContent = [];
+    let inStructuredSection = false;
     
-    if (conceptLines.length > 0) {
-      commentContent = conceptLines.join('\n').trim();
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      
+      // Check if this line starts a new concept/section
+      if (trimmed.match(/^\d+\.\s*(CONCEPT|WHY|HOW|CODE):/i)) {
+        inStructuredSection = true;
+        structuredContent.push(line);
+      }
+      // If we're in a structured section, include continuation lines
+      else if (inStructuredSection) {
+        // Stop at explanatory text or empty lines followed by explanatory text
+        if (trimmed.match(/^(These foundational|Would you like|For your|Note:|Want to explore)/i) ||
+            (trimmed === '' && i + 1 < lines.length && 
+             lines[i + 1].trim().match(/^(These foundational|Would you like|For your|Note:|Want to explore)/i))) {
+          break;
+        }
+        // Include the line if it's indented content or related text
+        if (trimmed !== '' || (structuredContent.length > 0 && structuredContent[structuredContent.length - 1].trim() !== '')) {
+          structuredContent.push(line);
+        }
+      }
+    }
+    
+    if (structuredContent.length > 0) {
+      commentContent = structuredContent.join('\n').trim();
     } else {
-      const beforeExplanation = text.split(/These foundational|Would you like|For your|Note:/i)[0];
+      // Fallback: everything before explanatory text
+      const beforeExplanation = text.split(/These foundational|Would you like|For your|Note:|Want to explore/i)[0];
       commentContent = beforeExplanation.trim();
     }
   }
@@ -441,9 +466,11 @@ function generateFollowUpResponse(prompt) {
   return new Promise(function(resolve, reject) {
     console.log('generateFollowUpResponse called with prompt length:', prompt.length);
     
+    const activeEditor = vscode.window.activeTextEditor;
     const folders = vscode.workspace.workspaceFolders;
     let workspaceRoot = null;
     
+    // Method 1: Check workspace folders for .env file
     if (folders && folders.length > 0) {
       for (const folder of folders) {
         if (folder.uri && folder.uri.fsPath) {
@@ -458,6 +485,44 @@ function generateFollowUpResponse(prompt) {
       }
     }
     
+    // Method 2: Use active editor file path and search up
+    if (!workspaceRoot && activeEditor && activeEditor.document && activeEditor.document.uri) {
+      const filePath = activeEditor.document.uri.fsPath;
+      console.log('Active file path:', filePath);
+      let testDir = path.dirname(filePath);
+      
+      // Search up the directory tree for .env file
+      for (let i = 0; i < 10; i++) {
+        console.log('Checking directory for .env:', testDir);
+        if (fs.existsSync(path.join(testDir, '.env'))) {
+          workspaceRoot = testDir;
+          console.log('Found .env at:', workspaceRoot);
+          break;
+        }
+        const parentDir = path.dirname(testDir);
+        if (parentDir === testDir) break; // reached root
+        testDir = parentDir;
+      }
+    }
+    
+    // Method 3: Direct hardcoded check for known location
+    if (!workspaceRoot) {
+      const knownPaths = [
+        'C:\\Users\\ericl\\LearnSor\\LearnSor',
+        path.join(process.cwd(), 'LearnSor')
+      ];
+      
+      for (const testPath of knownPaths) {
+        console.log('Checking known path for .env:', testPath);
+        if (fs.existsSync(testPath) && fs.existsSync(path.join(testPath, '.env'))) {
+          workspaceRoot = testPath;
+          console.log('Found .env at known path:', workspaceRoot);
+          break;
+        }
+      }
+    }
+    
+    // Fallback
     if (!workspaceRoot) {
       workspaceRoot = process.cwd();
       console.log('Using fallback workspace:', workspaceRoot);
@@ -472,14 +537,23 @@ params = json.loads(sys.stdin.read())
 proj = params.get("project_path", ".")
 env_path = os.path.join(proj, ".env")
 
+print(f"DEBUG: Looking for .env at: {env_path}", file=sys.stderr)
+print(f"DEBUG: .env exists: {os.path.exists(env_path)}", file=sys.stderr)
+
 if os.path.exists(env_path):
     load_dotenv(dotenv_path=env_path)
+    print(f"DEBUG: Loaded .env from: {env_path}", file=sys.stderr)
 else:
     load_dotenv()
+    print("DEBUG: Used default .env loading", file=sys.stderr)
 
 api_key = os.getenv("ANTHROPIC_API_KEY")
+print(f"DEBUG: API key found: {bool(api_key)}", file=sys.stderr)
 
 if not api_key:
+    print(f"DEBUG: Current working directory: {os.getcwd()}", file=sys.stderr)
+    print(f"DEBUG: Project path: {proj}", file=sys.stderr)
+    print(f"DEBUG: Full env path: {os.path.abspath(env_path)}", file=sys.stderr)
     raise ValueError("ANTHROPIC_API_KEY not found in environment")
 
 client = anthropic.Anthropic(api_key=api_key)

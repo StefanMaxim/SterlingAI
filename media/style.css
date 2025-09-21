@@ -129,7 +129,11 @@ body {
 }
 
 .level-button:not(.disabled) {
-    cursor: pointer;
+    cursor: pointer !important;
+}
+
+.level-button:not(.disabled) * {
+    cursor: pointer !important;
 }
 
 .level-info {

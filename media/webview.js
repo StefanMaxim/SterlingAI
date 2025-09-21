@@ -6,7 +6,7 @@ const vscode = acquireVsCodeApi();
                 currentTheme = currentTheme === 'light' ? 'dark' : 'light';
                 document.body.setAttribute('data-theme', currentTheme);
                 const t = document.querySelector('.theme-toggle');
-                if (t) t.textContent = currentTheme === 'light' ? '🌙 Dark Mode' : '☀️ Light Mode';
+                if (t) t.textContent = currentTheme === 'light' ? '🌑' : '☀️';
                 vscode.postMessage({ command: 'toggleTheme', theme: currentTheme });
             }
             
