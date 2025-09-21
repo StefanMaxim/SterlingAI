@@ -390,8 +390,96 @@ function generateEducationalResponse(code, question, level, language) {
       }
     }
     
+    // If still not found, perform a limited recursive search inside each workspace folder
     if (!workspaceRoot) {
-      return reject(new Error('Could not find api_client.py. Make sure it exists in the workspace root.'));
+      console.log('api_client.py not found in obvious locations, starting limited workspace search');
+      try {
+        const maxDepth = 4;
+        const visited = new Set();
+
+        function searchDir(dir, depth) {
+          if (!dir || depth > maxDepth || visited.has(dir)) return null;
+          visited.add(dir);
+          let entries;
+          try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return null; }
+
+          for (const e of entries) {
+            const full = path.join(dir, e.name);
+            if (e.isFile() && e.name === 'api_client.py') return dir;
+            if (e.isDirectory()) {
+              const found = searchDir(full, depth + 1);
+              if (found) return found;
+            }
+          }
+          return null;
+        }
+
+        if (folders && folders.length > 0) {
+          for (const folder of folders) {
+            try {
+              const start = folder.uri && folder.uri.fsPath ? folder.uri.fsPath : null;
+              if (!start) continue;
+              const found = searchDir(start, 0);
+              console.log('Searched workspace folder:', start, 'found:', !!found);
+              if (found) { workspaceRoot = found; break; }
+            } catch (e) {
+              console.log('Error searching folder', folder, e && e.message);
+            }
+          }
+        }
+      } catch (e) {
+        console.log('Error during recursive search for api_client.py:', e && e.message);
+      }
+    }
+
+    if (!workspaceRoot) {
+      // Build a list of candidate paths to check and log each check for diagnostics
+      const candidates = [];
+      try {
+        // workspace folders
+        if (folders && folders.length > 0) {
+          for (const f of folders) if (f && f.uri && f.uri.fsPath) candidates.push(f.uri.fsPath);
+        }
+
+        // __dirname (extension install location)
+        candidates.push(__dirname);
+
+        // process cwd
+        candidates.push(process.cwd());
+
+        // active editor file's directory and upward parents
+        if (activeEditor && activeEditor.document && activeEditor.document.uri) {
+          let p = path.dirname(activeEditor.document.uri.fsPath);
+          for (let i = 0; i < 6 && p; i++) {
+            candidates.push(p);
+            const parent = path.dirname(p);
+            if (parent === p) break;
+            p = parent;
+          }
+        }
+      } catch (e) {
+        console.log('Error building candidate list for api_client.py', e && e.message);
+      }
+
+      // De-duplicate and check candidates
+      const uniq = Array.from(new Set(candidates.filter(Boolean)));
+      console.log('api_client.py candidates to check:', uniq);
+
+      for (const c of uniq) {
+        try {
+          const exists = fs.existsSync(path.join(c, 'api_client.py'));
+          console.log('Checking', c, 'api_client.py exists=', exists);
+          if (exists) { workspaceRoot = c; break; }
+        } catch (e) {
+          console.log('Error checking candidate', c, e && e.message);
+        }
+      }
+
+      // If still not found, give a helpful diagnostic list in the error
+      if (!workspaceRoot) {
+        const tried = uniq.slice(0, 20).join(', ');
+        return reject(new Error('Could not find api_client.py. Paths tried: ' + tried));
+      }
     }
 
     const filename = (activeEditor && activeEditor.document && activeEditor.document.fileName)
