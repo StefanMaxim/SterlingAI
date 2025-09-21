@@ -314,7 +314,9 @@ function generateEducationalResponse(code, question, level, language) {
       const knownPaths = [
         'C:\\Users\\ericl\\LearnSor\\LearnSor',
         path.join(process.cwd(), 'LearnSor'),
-        process.cwd()
+        process.cwd(),
+        __dirname,
+        path.join(__dirname, '..')
       ];
       
       for (const testPath of knownPaths) {
@@ -327,11 +329,41 @@ function generateEducationalResponse(code, question, level, language) {
       }
     }
     
+    // If still not found, try ascending from process.cwd() and __dirname for a few levels
+    const searched = [];
     if (!workspaceRoot) {
-      console.error('Failed to find api_client.py. Searched:');
-      console.error('- Workspace folders:', folders?.map(f => f.uri?.fsPath));
-      console.error('- Active file path:', activeEditor?.document?.uri?.fsPath);
-      return reject(new Error('Could not find api_client.py. Make sure it exists in the workspace root.'));
+      const rootsToTry = [];
+      if (folders && folders.length > 0) rootsToTry.push(...folders.map(f => f.uri.fsPath));
+      if (activeEditor && activeEditor.document && activeEditor.document.uri) rootsToTry.push(path.dirname(activeEditor.document.uri.fsPath));
+      rootsToTry.push(process.cwd());
+      rootsToTry.push(__dirname);
+
+      for (const start of rootsToTry) {
+        if (!start) continue;
+        let testDir = start;
+        for (let i = 0; i < 6; i++) {
+          const candidate = path.join(testDir, 'api_client.py');
+          searched.push(candidate);
+          if (fs.existsSync(candidate)) {
+            workspaceRoot = testDir;
+            console.log('Found api_client.py at:', workspaceRoot);
+            break;
+          }
+          const parent = path.dirname(testDir);
+          if (!parent || parent === testDir) break;
+          testDir = parent;
+        }
+        if (workspaceRoot) break;
+      }
+    }
+
+    if (!workspaceRoot) {
+      const folderPaths = (folders || []).map(f => f.uri && f.uri.fsPath).filter(Boolean);
+      console.error('Failed to find api_client.py. Searched locations (examples):');
+      console.error('- Workspace folders:', folderPaths);
+      console.error('- Active file path:', activeEditor && activeEditor.document && activeEditor.document.uri && activeEditor.document.uri.fsPath);
+      console.error('- Additional candidates tried:', searched.slice(0, 20));
+      return reject(new Error('Could not find api_client.py. Make sure it exists in the workspace root (or in a parent directory). Searched these candidates: ' + JSON.stringify(searched.slice(0,20))));
     }
     
     console.log('Using workspace root:', workspaceRoot);
