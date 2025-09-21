@@ -2,6 +2,7 @@ from dotenv import load_dotenv
 import os
 import anthropic
 import glob
+import re
 
 load_dotenv()
 api_key = os.getenv('ANTHROPIC_API_KEY')
@@ -130,7 +131,87 @@ def analyze_project_context(project_path, max_files=10):
 
     return "\n".join(context_parts)
 
-def extract_relevant_context(user_code, project_context, task_description):
+def summarize_active_file(active_file_path: str) -> str:
+    """Summarize the active file: imports, top-level defs/classes, globals/constants, TODO/FIXME."""
+    if not active_file_path or not os.path.isfile(active_file_path):
+        return ""
+
+    try:
+        with open(active_file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except Exception:
+        return ""
+
+    lines = content.splitlines()
+    imports: list[str] = []
+    top_level_defs: list[str] = []
+    globals_consts: list[str] = []
+    todos: list[str] = []
+
+    # Simple helpers
+    def is_top_level(line: str) -> bool:
+        return len(line) > 0 and (line[0] != ' ' and line[0] != '\t')
+
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        lower = stripped.lower()
+
+        # Imports/packages/includes/usings
+        if (lower.startswith('import ') or lower.startswith('from ') or lower.startswith('package ') or
+                '#include' in stripped or lower.startswith('using ')):
+            imports.append(stripped)
+
+        # TODO / FIXME anywhere
+        if 'todo' in lower or 'fixme' in lower:
+            todos.append(f"L{idx+1}: {stripped}")
+
+        # Top-level defs/classes (naive patterns)
+        if is_top_level(line):
+            # Python
+            if re.match(r"^(def|class)\s+\w+", stripped):
+                top_level_defs.append(stripped)
+            # JS/TS
+            elif re.match(r"^(export\s+)?(async\s+)?function\s+\w+\s*\(", stripped):
+                top_level_defs.append(stripped)
+            elif re.match(r"^(export\s+)?class\s+\w+", stripped):
+                top_level_defs.append(stripped)
+            elif re.match(r"^(const|let|var)\s+\w+\s*=\s*\(.*\)\s*=>", stripped):
+                top_level_defs.append(stripped)
+            # Java
+            elif re.match(r"^(public|private|protected|abstract|final|static)\s+(class|interface|enum)\s+\w+", stripped):
+                top_level_defs.append(stripped)
+            elif re.match(r"^(public|private|protected|static|final|synchronized|native|abstract)\s+[\w\<\>\[\]\.,\s]+\s+\w+\s*\([^;]*\)\s*\{?", stripped):
+                top_level_defs.append(stripped)
+            # C/C++/C# (very naive function/class)
+            elif re.match(r"^(class|struct)\s+\w+", stripped):
+                top_level_defs.append(stripped)
+            elif re.match(r"^[\w:\*<&>\s]+\s+\w+\s*\([^;]*\)\s*\{?\s*$", stripped):
+                top_level_defs.append(stripped)
+
+            # Globals/constants (ALL_CAPS or obvious const patterns)
+            if re.match(r"^[A-Z0-9_]+\s*=", stripped):
+                globals_consts.append(stripped)
+            elif re.match(r"^(const|static\s+final)\s+", stripped):
+                globals_consts.append(stripped)
+
+    parts: list[str] = []
+    parts.append(f"FILE: {os.path.basename(active_file_path)}")
+    if imports:
+        parts.append("IMPORTS:")
+        parts.extend(f"  - {imp}" for imp in imports[:50])
+    if top_level_defs:
+        parts.append("TOP-LEVEL DEFINITIONS:")
+        parts.extend(f"  - {d}" for d in top_level_defs[:100])
+    if globals_consts:
+        parts.append("GLOBALS/CONSTS:")
+        parts.extend(f"  - {g}" for g in globals_consts[:50])
+    if todos:
+        parts.append("TODO/FIXME:")
+        parts.extend(f"  - {t}" for t in todos[:50])
+
+    return "\n".join(parts)
+
+def extract_relevant_context(user_code, project_context, task_description, active_summary: str | None = None):
     """
     Extract the most relevant context for the user's current task.
 
@@ -143,6 +224,12 @@ def extract_relevant_context(user_code, project_context, task_description):
         str: Relevant context for generating hints
     """
     context_parts = []
+
+    # Add active file summary first if available
+    if active_summary and active_summary.strip():
+        context_parts.append("ACTIVE FILE SUMMARY:")
+        context_parts.append(active_summary)
+        context_parts.append("")
 
     # Add project context if available
     if project_context.strip():
@@ -162,7 +249,7 @@ def extract_relevant_context(user_code, project_context, task_description):
 
     return "\n".join(context_parts)
 
-def generate_hints(user_code, task_description, programming_language=None, filename=None, project_path=None, additional_instructions=None):
+def generate_hints(user_code, task_description, programming_language=None, filename=None, project_path=None, additional_instructions=None, active_file_path: str | None = None):
     """
     Generate step-by-step hints for a coding task with full project context.
 
@@ -192,8 +279,11 @@ def generate_hints(user_code, task_description, programming_language=None, filen
     if project_path:
         project_context = analyze_project_context(project_path)
 
+    # Active file summary (if provided)
+    active_summary = summarize_active_file(active_file_path) if active_file_path else ""
+
     # Extract relevant context
-    full_context = extract_relevant_context(user_code, project_context, task_description)
+    full_context = extract_relevant_context(user_code, project_context, task_description, active_summary)
 
     # Build the prompt with full context awareness
     prompt = f"""You are LearnSor, an AI tutor that helps people learn programming by providing hints instead of writing code for them.
@@ -499,7 +589,7 @@ def parse_and_enhance_hints(level1_hints, level2_hints, level3_hints):
 
 
 # Partial generation wrapper: compute only up to requested level
-def generate_hints_for_level(user_code, task_description, filename=None, project_path=".", programming_language=None, additional_instructions=None, target_level="level1"):
+def generate_hints_for_level(user_code, task_description, filename=None, project_path=".", programming_language=None, additional_instructions=None, target_level="level1", active_file_path: str | None = None):
     """
     Generate hints up to a target level to minimize unnecessary API calls.
 
@@ -521,7 +611,7 @@ def generate_hints_for_level(user_code, task_description, filename=None, project
     lang = programming_language or (detect_language_from_filename(filename) if filename else 'python')
 
     # Compute only what is needed
-    l1 = generate_hints(user_code, task_description, programming_language=lang, filename=filename, project_path=project_path, additional_instructions=additional_instructions)
+    l1 = generate_hints(user_code, task_description, programming_language=lang, filename=filename, project_path=project_path, additional_instructions=additional_instructions, active_file_path=active_file_path)
 
     l2 = ""
     l3 = ""

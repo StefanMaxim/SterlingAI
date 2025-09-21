@@ -2,6 +2,7 @@ const vscode = require('vscode');
 const axios = require('axios');
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 
 const LEARNING_LEVELS = [
   { id: 'concept', title: '🧠 Concept & Why', description: 'High-level steps and reasoning (Level 1)' },
@@ -103,31 +104,77 @@ function handleLevelRequest(requestedLevel, selectedText, question, editor, pane
   const levelIndex = LEARNING_LEVELS.findIndex(l => l.id === requestedLevel);
   const currentTime = Date.now();
   
+  // First check: Is a request already in progress?
   if (isRequestInFlight) {
+    console.log('Request blocked: already in progress');
     panel.webview.postMessage({
       command: 'showError',
-      message: 'A request is already in progress. Please wait...'
+      message: 'A request is already in progress. Please wait for it to complete.'
+    });
+    // Clear any loading state
+    panel.webview.postMessage({
+      command: 'showResponse',
+      level: requestedLevel,
+      levelTitle: 'Request Blocked',
+      response: 'A request is already in progress. Please wait for it to complete.',
+      canProceed: false
     });
     return;
   }
   
-  // Check if user can access this level
+  // Second check: Level access and timing validation
   if (levelIndex > userProgress.currentLevel) {
-    // Check if they've waited long enough
     const lastLevelTime = userProgress.levelTimestamps[userProgress.currentLevel];
     if (lastLevelTime && (currentTime - lastLevelTime) < 60000) {
       const waitTime = Math.ceil((60000 - (currentTime - lastLevelTime)) / 1000);
+      console.log(`Request blocked: must wait ${waitTime} more seconds`);
       panel.webview.postMessage({
         command: 'showError',
         message: `Please wait ${waitTime} more seconds before accessing the next level. Learn progressively! 🎓`
+      });
+      // Clear any loading state that might have been set
+      panel.webview.postMessage({
+        command: 'showResponse',
+        level: requestedLevel,
+        levelTitle: 'Request Blocked',
+        response: `Please wait ${waitTime} more seconds before accessing the next level.`,
+        canProceed: false
       });
       return;
     }
   }
 
-  // Allow access and generate response
+  // Third check: Can user access current level? (allow re-requests of completed levels)
+  if (levelIndex < userProgress.currentLevel) {
+    // Allow re-accessing previous levels
+    console.log('Allowing re-access to previous level:', requestedLevel);
+  } else if (levelIndex === userProgress.currentLevel) {
+    // Allow current level
+    console.log('Allowing access to current level:', requestedLevel);
+  } else if (levelIndex === userProgress.currentLevel + 1) {
+    // Allow next level (timing already checked above)
+    console.log('Allowing access to next level:', requestedLevel);
+  } else {
+    // Block access to levels too far ahead
+    console.log('Request blocked: level too far ahead');
+    panel.webview.postMessage({
+      command: 'showError',
+      message: 'Please complete the previous levels first.'
+    });
+    // Clear any loading state
+    panel.webview.postMessage({
+      command: 'showResponse',
+      level: requestedLevel,
+      levelTitle: 'Request Blocked',
+      response: 'Please complete the previous levels first.',
+      canProceed: false
+    });
+    return;
+  }
+
+  // All checks passed - proceed with request
   const language = getLanguageFromUri(editor.document.uri);
-  console.log('Sending loading message to webview');
+  console.log('All checks passed, sending loading message to webview');
   
   panel.webview.postMessage({
     command: 'showLoading',
@@ -135,14 +182,18 @@ function handleLevelRequest(requestedLevel, selectedText, question, editor, pane
   });
 
   console.log('Calling generateEducationalResponse...');
+  
+  // Set request in flight AFTER loading message but BEFORE the async call
   isRequestInFlight = true;
+  
   generateEducationalResponse(selectedText, question, requestedLevel, language)
     .then(function(response) {
       console.log('Got response, sending to webview');
-      // Update progress
+      // Update progress only if this is a new or current level
       if (levelIndex >= userProgress.currentLevel) {
         userProgress.currentLevel = levelIndex;
         userProgress.levelTimestamps[levelIndex] = currentTime;
+        console.log('Updated progress to level:', levelIndex);
       }
 
       panel.webview.postMessage({
@@ -162,7 +213,7 @@ function handleLevelRequest(requestedLevel, selectedText, question, editor, pane
           level: completedId
         });
       } catch (e) {
-        // no-op
+        console.error('Error marking level completed:', e);
       }
     })
     .catch(function(error) {
@@ -171,9 +222,19 @@ function handleLevelRequest(requestedLevel, selectedText, question, editor, pane
         command: 'showError',
         message: error.message || 'Unknown error occurred'
       });
+      // Clear loading state on error
+      panel.webview.postMessage({
+        command: 'showResponse',
+        level: requestedLevel,
+        levelTitle: 'Error',
+        response: 'Request failed. Please try again.',
+        canProceed: false
+      });
     })
     .finally(function() {
+      // Always clear the request flag
       isRequestInFlight = false;
+      console.log('Request completed, cleared isRequestInFlight flag');
     });
 }
 
@@ -204,18 +265,90 @@ function handleFollowUpQuestion(followUpQuestion, selectedText, editor, panel) {
 function generateEducationalResponse(code, question, level, language) {
   // Route through Python api_client to use the 3-level system
   return new Promise(function(resolve, reject) {
-    const workspaceRoot = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0])
-      ? vscode.workspace.workspaceFolders[0].uri.fsPath
-      : __dirname;
-
     const activeEditor = vscode.window.activeTextEditor;
-    const filename = activeEditor ? path.basename(activeEditor.document.fileName) : undefined;
+    let workspaceRoot = null;
+    
+    // Try multiple methods to find the workspace root
+    const folders = vscode.workspace.workspaceFolders;
+    
+    // Method 1: Use workspace folders
+    if (folders && folders.length > 0) {
+      for (const folder of folders) {
+        if (folder.uri && folder.uri.fsPath) {
+          const wsPath = folder.uri.fsPath;
+          console.log('Checking workspace folder:', wsPath);
+          if (fs.existsSync(path.join(wsPath, 'api_client.py'))) {
+            workspaceRoot = wsPath;
+            console.log('Found api_client.py in workspace folder:', workspaceRoot);
+            break;
+          }
+        }
+      }
+    }
+    
+    // Method 2: Use active editor file path
+    if (!workspaceRoot && activeEditor && activeEditor.document && activeEditor.document.uri) {
+      const filePath = activeEditor.document.uri.fsPath;
+      console.log('Active file path:', filePath);
+      let testDir = path.dirname(filePath);
+      
+      // Search up the directory tree
+      for (let i = 0; i < 10; i++) {
+        console.log('Checking directory:', testDir);
+        if (fs.existsSync(path.join(testDir, 'api_client.py'))) {
+          workspaceRoot = testDir;
+          console.log('Found api_client.py at:', workspaceRoot);
+          break;
+        }
+        const parentDir = path.dirname(testDir);
+        if (parentDir === testDir) break; // reached root
+        testDir = parentDir;
+      }
+    }
+    
+    // Method 3: Direct hardcoded check for known location
+    if (!workspaceRoot) {
+      const knownPaths = [
+        'C:\\Users\\ericl\\LearnSor\\LearnSor',
+        path.join(process.cwd(), 'LearnSor'),
+        process.cwd()
+      ];
+      
+      for (const testPath of knownPaths) {
+        console.log('Checking known path:', testPath);
+        if (fs.existsSync(testPath) && fs.existsSync(path.join(testPath, 'api_client.py'))) {
+          workspaceRoot = testPath;
+          console.log('Found api_client.py at known path:', workspaceRoot);
+          break;
+        }
+      }
+    }
+    
+    if (!workspaceRoot) {
+      console.error('Failed to find api_client.py. Searched:');
+      console.error('- Workspace folders:', folders?.map(f => f.uri?.fsPath));
+      console.error('- Active file path:', activeEditor?.document?.uri?.fsPath);
+      return reject(new Error('Could not find api_client.py. Make sure it exists in the workspace root.'));
+    }
+    
+    console.log('Using workspace root:', workspaceRoot);
+
+    const filename = (activeEditor && activeEditor.document && activeEditor.document.fileName)
+      ? path.basename(activeEditor.document.fileName)
+      : undefined;
+    const activeFilePath = (activeEditor && activeEditor.document && activeEditor.document.fileName)
+      ? activeEditor.document.fileName
+      : undefined;
 
     const pySnippet = [
-      'import sys, json',
-      'from api_client import generate_hints_for_level',
+      'import sys, json, os, importlib.util',
       'params = json.loads(sys.stdin.read())',
-      'res = generate_hints_for_level(params.get("code", ""), params.get("task", ""), filename=params.get("filename"), project_path=params.get("project_path", "."), target_level=params.get("target_level", "level1"))',
+      'proj = params.get("project_path", ".")',
+      'api_path = os.path.join(proj, "api_client.py")',
+      'spec = importlib.util.spec_from_file_location("api_client", api_path)',
+      'mod = importlib.util.module_from_spec(spec)',
+      'spec.loader.exec_module(mod)',
+      'res = mod.generate_hints_for_level(params.get("code", ""), params.get("task", ""), filename=params.get("filename"), project_path=proj, target_level=params.get("target_level", "level1"), active_file_path=params.get("active_file_path"))',
       'print(json.dumps(res))'
     ].join('; ');
 
@@ -241,14 +374,23 @@ function generateEducationalResponse(code, question, level, language) {
         // Fallback to 'py -3' on Windows if python not found
         if (process.platform === 'win32' && err.code === 'ENOENT') {
           try {
-            const fallback = spawn('py', ['-3', '-c', pySnippet], { cwd: workspaceRoot, env: process.env });
+            const fallback = spawn('py', ['-3', '-c', pySnippet], { cwd: workspaceRoot || process.cwd(), env: process.env });
             attachHandlers(fallback);
             // resend payload on fallback
             fallback.stdin.write(JSON.stringify({
               code: code,
               task: question,
               filename: filename,
-              project_path: workspaceRoot
+              project_path: workspaceRoot,
+              active_file_path: activeFilePath,
+              target_level: (function(){
+                switch (level) {
+                  case 'concept': return 'level1';
+                  case 'how': return 'level2';
+                  case 'code': return 'level3';
+                  default: return 'level1';
+                }
+              })()
             }));
             fallback.stdin.end();
             return;
@@ -294,6 +436,7 @@ function generateEducationalResponse(code, question, level, language) {
         task: question,
         filename: filename,
         project_path: workspaceRoot,
+        active_file_path: activeFilePath,
         target_level: (function(){
           switch (level) {
             case 'concept': return 'level1';
@@ -312,13 +455,13 @@ function generateEducationalResponse(code, question, level, language) {
     }
 
     try {
-      child = spawn(pythonCmd, ['-c', pySnippet], { cwd: workspaceRoot, env: process.env });
+      child = spawn(pythonCmd, ['-c', pySnippet], { cwd: workspaceRoot || process.cwd(), env: process.env });
       attachHandlers(child);
     } catch (e) {
       // Fallback immediate attempt
       if (process.platform === 'win32') {
         try {
-          child = spawn('py', ['-3', '-c', pySnippet], { cwd: workspaceRoot, env: process.env });
+          child = spawn('py', ['-3', '-c', pySnippet], { cwd: workspaceRoot || process.cwd(), env: process.env });
           attachHandlers(child);
         } catch (e2) {
           reject(new Error('Failed to start Python: ' + e2.message));
@@ -658,7 +801,7 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
             <div class="error-message" id="errorMessage"></div>
             
             <div class="learning-levels">
-                <div class="level-button available" id="level-concept" onclick="requestLevel('concept', 0)">
+                <div class="level-button available" id="level-concept" role="button" tabindex="0">
                     <div class="level-info">
                         <span>🧠 Concept & Why</span>
                         <small>High-level steps and reasoning</small>
@@ -666,7 +809,7 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
                     <span class="level-status available">START HERE</span>
                 </div>
                 
-                <div class="level-button disabled" id="level-how">
+                <div class="level-button disabled" id="level-how" role="button" tabindex="0">
                     <div class="level-info">
                         <span>🔧 How (Implementation Hints)</span>
                         <small>Guided implementation ideas</small>
@@ -674,7 +817,7 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
                     <span class="level-status locked">LOCKED</span>
                 </div>
                 
-                <div class="level-button disabled" id="level-code">
+                <div class="level-button disabled" id="level-code" role="button" tabindex="0">
                     <div class="level-info">
                         <span>💾 Code (with blanks)</span>
                         <small>Concrete code lines with blanks</small>
@@ -706,26 +849,68 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
             function toggleTheme() {
                 currentTheme = currentTheme === 'light' ? 'dark' : 'light';
                 document.body.setAttribute('data-theme', currentTheme);
-                document.querySelector('.theme-toggle').textContent = currentTheme === 'light' ? '🌙 Dark Mode' : '☀️ Light Mode';
-                vscode.postMessage({command: 'toggleTheme', theme: currentTheme});
+                const t = document.querySelector('.theme-toggle');
+                if (t) t.textContent = currentTheme === 'light' ? '🌙 Dark Mode' : '☀️ Light Mode';
+                vscode.postMessage({ command: 'toggleTheme', theme: currentTheme });
             }
             
-            function requestLevel(levelId, index) {
+            let webviewRequestInProgress = false;
+            
+            function requestLevel(levelId) {
                 console.log('Requesting level:', levelId);
-                const button = document.querySelector(\`[onclick="requestLevel('\${levelId}', \${index})"]\`) || document.getElementById(\`level-\${levelId}\`);
+                
+                // Prevent double-clicks on webview side
+                if (webviewRequestInProgress) {
+                    console.log('Webview: Request already in progress, ignoring click');
+                    return;
+                }
+                
+                const button = document.getElementById('level-' + levelId);
                 if (button && button.classList.contains('disabled')) return;
-                
+
+                webviewRequestInProgress = true;
                 showLoading();
-                vscode.postMessage({command: 'requestLevel', level: levelId});
-                
-                // Fallback timeout in case message doesn't come back
+                vscode.postMessage({ command: 'requestLevel', level: levelId });
+
+                // UI fallback if host never replies
+                const timeoutMs = 30000;
                 setTimeout(() => {
-                    const spinnerStillVisible = document.getElementById('responseContent')?.textContent?.includes('LearnSor is thinking');
-                    if (spinnerStillVisible) {
+                    const el = document.getElementById('responseContent');
+                    const stillLoading = el && el.textContent && el.textContent.includes('LearnSor is thinking');
+                    if (stillLoading) {
                         showError('Request timed out. Please try again or check your API key.');
                     }
-                }, 30000);
+                    webviewRequestInProgress = false; // Clear on timeout
+                }, timeoutMs);
             }
+
+            // Bind clicks (avoid inline handlers)
+            (function bindLevelButtons() {
+                const concept = document.getElementById('level-concept');
+                const how = document.getElementById('level-how');
+                const code = document.getElementById('level-code');
+                
+                // Remove any existing click handlers and add new ones
+                if (concept) {
+                    concept.replaceWith(concept.cloneNode(true));
+                    const newConcept = document.getElementById('level-concept');
+                    newConcept.addEventListener('click', () => requestLevel('concept'));
+                }
+                if (how) {
+                    how.replaceWith(how.cloneNode(true));
+                    const newHow = document.getElementById('level-how');
+                    newHow.addEventListener('click', () => { 
+                        if (!newHow.classList.contains('disabled')) requestLevel('how'); 
+                    });
+                }
+                if (code) {
+                    code.replaceWith(code.cloneNode(true));
+                    const newCode = document.getElementById('level-code');
+                    newCode.addEventListener('click', () => { 
+                        if (!newCode.classList.contains('disabled')) requestLevel('code'); 
+                    });
+                }
+            })();
             
             function showLoading() {
                 const responseArea = document.getElementById('responseArea');
@@ -751,31 +936,27 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
                     const nextLevel = levels[currentIndex + 1];
                     const nextButton = document.getElementById(\`level-\${nextLevel}\`);
                     if (nextButton) {
-                        // Start 1-minute timer
-                        setTimeout(() => {
-                            nextButton.classList.remove('disabled');
-                            nextButton.onclick = () => requestLevel(nextLevel, currentIndex + 1);
-                            const statusSpan = nextButton.querySelector('.level-status');
-                            statusSpan.textContent = 'AVAILABLE';
-                            statusSpan.className = 'level-status available';
-                        }, 3000); // 3 seconds
-                        
-                        // Show countdown
+                        // Show countdown immediately
                         const statusSpan = nextButton.querySelector('.level-status');
                         let countdown = 60;
+                        
                         const timer = setInterval(() => {
                             // If already unlocked somewhere else, mark READY and stop
                             if (!nextButton.classList.contains('disabled')) {
                                 clearInterval(timer);
-                                statusSpan.textContent = 'READY';
+                                statusSpan.textContent = 'AVAILABLE';
                                 statusSpan.className = 'level-status available';
                                 return;
                             }
-                            statusSpan.textContent = \`WAIT \${countdown}s\`;
-                            countdown--;
-                            if (countdown < 0) {
+                            
+                            if (countdown > 0) {
+                                statusSpan.textContent = \`WAIT \${countdown}s\`;
+                                countdown--;
+                            } else {
+                                // Actually unlock the button when countdown reaches 0
                                 clearInterval(timer);
-                                statusSpan.textContent = 'READY';
+                                nextButton.classList.remove('disabled');
+                                statusSpan.textContent = 'AVAILABLE';
                                 statusSpan.className = 'level-status available';
                             }
                         }, 1000);
@@ -817,6 +998,8 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
                         showLoading();
                         break;
                     case 'showResponse':
+                        webviewRequestInProgress = false; // Clear request flag
+                        
                         const responseArea = document.getElementById('responseArea');
                         let responseTitle = document.getElementById('responseTitle');
                         let responseContent = document.getElementById('responseContent');
@@ -844,14 +1027,15 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
                         // Grey out and disable the completed level button
                         (function(){
                             const id = message.level;
-                            const btn = document.getElementById('level-' + id) || document.querySelector('[onclick="requestLevel(\'' + id + '\', 0)"]');
-                            if (!btn) return;
-                            btn.classList.add('disabled');
-                            btn.onclick = null;
-                            const statusSpan = btn.querySelector('.level-status');
-                            if (statusSpan) {
-                                statusSpan.textContent = 'DONE';
-                                statusSpan.className = 'level-status completed';
+                            const btn = document.getElementById('level-' + id);
+                            if (btn) {
+                                btn.classList.add('disabled');
+                                btn.onclick = null;
+                                const statusSpan = btn.querySelector('.level-status');
+                                if (statusSpan) {
+                                    statusSpan.textContent = 'DONE';
+                                    statusSpan.className = 'level-status completed';
+                                }
                             }
                         })();
                         break;
@@ -859,6 +1043,7 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
                         addChatMessage(message.response, 'assistant');
                         break;
                     case 'showError':
+                        webviewRequestInProgress = false; // Clear request flag on error too
                         showError(message.message);
                         break;
                 }

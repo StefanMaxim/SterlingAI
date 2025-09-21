@@ -7,7 +7,9 @@
     "vscode": "^1.74.0"
   },
   "categories": ["Education", "Other"],
-  "activationEvents": [],
+  "activationEvents": [
+    "onCommand:learnsor.askQuestion"
+  ],
   "main": "./extension.js",
   "contributes": {
     "commands": [
