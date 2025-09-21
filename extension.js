@@ -4,10 +4,9 @@ const { spawn } = require('child_process');
 const path = require('path');
 
 const LEARNING_LEVELS = [
-  { id: 'logical', title: '🧠 Logical Steps', description: 'Walk through the thinking process' },
-  { id: 'pseudocode', title: '📝 Pseudo-code', description: 'Show the algorithm structure' },
-  { id: 'functions', title: '🔧 Functions & Methods', description: 'Specific functions to use' },
-  { id: 'snippet', title: '💾 Code Snippet', description: 'Working code example' }
+  { id: 'concept', title: '🧠 Concept & Why', description: 'High-level steps and reasoning (Level 1)' },
+  { id: 'how', title: '🔧 How (Implementation Hints)', description: 'Guided implementation ideas (Level 2)' },
+  { id: 'code', title: '💾 Code (with blanks)', description: 'Concrete code lines with blanks (Level 3)' }
 ];
 
 // Track user progress and timing
@@ -17,6 +16,9 @@ let userProgress = {
   selectedCode: '',
   currentQuestion: ''
 };
+
+// Prevent duplicate concurrent requests
+let isRequestInFlight = false;
 
 function activate(context) {
   console.log('LearnSor extension is now active!');
@@ -101,6 +103,14 @@ function handleLevelRequest(requestedLevel, selectedText, question, editor, pane
   const levelIndex = LEARNING_LEVELS.findIndex(l => l.id === requestedLevel);
   const currentTime = Date.now();
   
+  if (isRequestInFlight) {
+    panel.webview.postMessage({
+      command: 'showError',
+      message: 'A request is already in progress. Please wait...'
+    });
+    return;
+  }
+  
   // Check if user can access this level
   if (levelIndex > userProgress.currentLevel) {
     // Check if they've waited long enough
@@ -125,6 +135,7 @@ function handleLevelRequest(requestedLevel, selectedText, question, editor, pane
   });
 
   console.log('Calling generateEducationalResponse...');
+  isRequestInFlight = true;
   generateEducationalResponse(selectedText, question, requestedLevel, language)
     .then(function(response) {
       console.log('Got response, sending to webview');
@@ -141,6 +152,18 @@ function handleLevelRequest(requestedLevel, selectedText, question, editor, pane
         response: response,
         canProceed: levelIndex < LEARNING_LEVELS.length - 1
       });
+
+      // Visually mark the completed level as done and disable it
+      try {
+        const levelIds = ['concept', 'how', 'code'];
+        const completedId = levelIds[levelIndex];
+        panel.webview.postMessage({
+          command: 'markCompleted',
+          level: completedId
+        });
+      } catch (e) {
+        // no-op
+      }
     })
     .catch(function(error) {
       console.log('Error in generateEducationalResponse:', error);
@@ -148,6 +171,9 @@ function handleLevelRequest(requestedLevel, selectedText, question, editor, pane
         command: 'showError',
         message: error.message || 'Unknown error occurred'
       });
+    })
+    .finally(function() {
+      isRequestInFlight = false;
     });
 }
 
@@ -187,58 +213,120 @@ function generateEducationalResponse(code, question, level, language) {
 
     const pySnippet = [
       'import sys, json',
-      'from api_client import generate_all_hints',
+      'from api_client import generate_hints_for_level',
       'params = json.loads(sys.stdin.read())',
-      'res = generate_all_hints(params.get("code", ""), params.get("task", ""), filename=params.get("filename"), project_path=params.get("project_path", "."))',
+      'res = generate_hints_for_level(params.get("code", ""), params.get("task", ""), filename=params.get("filename"), project_path=params.get("project_path", "."), target_level=params.get("target_level", "level1"))',
       'print(json.dumps(res))'
     ].join('; ');
 
-    const child = spawn('python', ['-c', pySnippet], { cwd: workspaceRoot });
+    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+    let child = null;
+    let killedByTimeout = false;
 
-    let stdout = '';
-    let stderr = '';
+    function attachHandlers(proc) {
+      let stdout = '';
+      let stderr = '';
 
-    child.stdout.on('data', function(data) { stdout += data.toString(); });
-    child.stderr.on('data', function(data) { stderr += data.toString(); });
+      proc.stdout.on('data', function(data) { stdout += data.toString(); });
+      proc.stderr.on('data', function(data) { stderr += data.toString(); });
 
-    child.on('error', function(err) {
-      reject(new Error('Failed to start Python: ' + err.message));
-    });
+      const KILL_MS = 45000;
+      const killTimer = setTimeout(function() {
+        killedByTimeout = true;
+        try { proc.kill(); } catch (e) {}
+      }, KILL_MS);
 
-    child.on('close', function(codeExit) {
-      if (codeExit !== 0) {
-        return reject(new Error('Python exited with code ' + codeExit + (stderr ? (': ' + stderr) : '')));
-      }
-      try {
-        const parsed = JSON.parse(stdout || '{}');
-        switch (level) {
-          case 'logical':
-          case 'pseudocode':
-            resolve(parsed.level1 || parsed.combined || 'No Level 1 output');
-            break;
-          case 'functions':
-            resolve(parsed.level2 || 'No Level 2 output');
-            break;
-          case 'snippet':
-            resolve(parsed.level3 || 'No Level 3 output');
-            break;
-          default:
-            resolve(parsed.combined || parsed.level1 || 'No output');
+      proc.on('error', function(err) {
+        clearTimeout(killTimer);
+        // Fallback to 'py -3' on Windows if python not found
+        if (process.platform === 'win32' && err.code === 'ENOENT') {
+          try {
+            const fallback = spawn('py', ['-3', '-c', pySnippet], { cwd: workspaceRoot, env: process.env });
+            attachHandlers(fallback);
+            // resend payload on fallback
+            fallback.stdin.write(JSON.stringify({
+              code: code,
+              task: question,
+              filename: filename,
+              project_path: workspaceRoot
+            }));
+            fallback.stdin.end();
+            return;
+          } catch (e2) {
+            return reject(new Error('Failed to start Python (fallback): ' + e2.message));
+          }
         }
-      } catch (e) {
-        reject(new Error('Failed to parse Python output: ' + e.message + (stdout ? (' | OUT: ' + stdout) : '')));
-      }
-    });
+        reject(new Error('Failed to start Python: ' + err.message));
+      });
 
-    // Send params to Python via stdin
-    const payload = {
-      code: code,
-      task: question,
-      filename: filename,
-      project_path: workspaceRoot
-    };
-    child.stdin.write(JSON.stringify(payload));
-    child.stdin.end();
+      proc.on('close', function(codeExit) {
+        clearTimeout(killTimer);
+        if (killedByTimeout) {
+          return reject(new Error('Python timed out after 45s'));
+        }
+        if (codeExit !== 0) {
+          return reject(new Error('Python exited with code ' + codeExit + (stderr ? (': ' + stderr) : '')));
+        }
+        try {
+          const parsed = JSON.parse(stdout || '{}');
+          switch (level) {
+            case 'logical':
+            case 'pseudocode':
+              resolve(parsed.level1 || parsed.combined || 'No Level 1 output');
+              break;
+            case 'functions':
+              resolve(parsed.level2 || 'No Level 2 output');
+              break;
+            case 'snippet':
+              resolve(parsed.level3 || 'No Level 3 output');
+              break;
+            default:
+              resolve(parsed.combined || parsed.level1 || 'No output');
+          }
+        } catch (e) {
+          reject(new Error('Failed to parse Python output: ' + e.message + (stdout ? (' | OUT: ' + stdout) : '') + (stderr ? (' | ERR: ' + stderr) : '')));
+        }
+      });
+
+      // Send params to Python via stdin
+      const payload = {
+        code: code,
+        task: question,
+        filename: filename,
+        project_path: workspaceRoot,
+        target_level: (function(){
+          switch (level) {
+            case 'concept': return 'level1';
+            case 'how': return 'level2';
+            case 'code': return 'level3';
+            default: return 'level1';
+          }
+        })()
+      };
+      try {
+        proc.stdin.write(JSON.stringify(payload));
+        proc.stdin.end();
+      } catch (e) {
+        reject(new Error('Failed to write to Python stdin: ' + e.message));
+      }
+    }
+
+    try {
+      child = spawn(pythonCmd, ['-c', pySnippet], { cwd: workspaceRoot, env: process.env });
+      attachHandlers(child);
+    } catch (e) {
+      // Fallback immediate attempt
+      if (process.platform === 'win32') {
+        try {
+          child = spawn('py', ['-3', '-c', pySnippet], { cwd: workspaceRoot, env: process.env });
+          attachHandlers(child);
+        } catch (e2) {
+          reject(new Error('Failed to start Python: ' + e2.message));
+        }
+      } else {
+        reject(new Error('Failed to start Python: ' + e.message));
+      }
+    }
   });
 }
 
@@ -570,34 +658,26 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
             <div class="error-message" id="errorMessage"></div>
             
             <div class="learning-levels">
-                <div class="level-button available" onclick="requestLevel('logical', 0)">
+                <div class="level-button available" id="level-concept" onclick="requestLevel('concept', 0)">
                     <div class="level-info">
-                        <span>🧠 Logical Steps</span>
-                        <small>Walk through the thinking process</small>
+                        <span>🧠 Concept & Why</span>
+                        <small>High-level steps and reasoning</small>
                     </div>
                     <span class="level-status available">START HERE</span>
                 </div>
                 
-                <div class="level-button disabled" id="level-pseudocode">
+                <div class="level-button disabled" id="level-how">
                     <div class="level-info">
-                        <span>📝 Pseudo-code</span>
-                        <small>Show the algorithm structure</small>
+                        <span>🔧 How (Implementation Hints)</span>
+                        <small>Guided implementation ideas</small>
                     </div>
                     <span class="level-status locked">LOCKED</span>
                 </div>
                 
-                <div class="level-button disabled" id="level-functions">
+                <div class="level-button disabled" id="level-code">
                     <div class="level-info">
-                        <span>🔧 Functions & Methods</span>
-                        <small>Specific functions to use</small>
-                    </div>
-                    <span class="level-status locked">LOCKED</span>
-                </div>
-                
-                <div class="level-button disabled" id="level-snippet">
-                    <div class="level-info">
-                        <span>💾 Code Snippet</span>
-                        <small>Working code example</small>
+                        <span>💾 Code (with blanks)</span>
+                        <small>Concrete code lines with blanks</small>
                     </div>
                     <span class="level-status locked">LOCKED</span>
                 </div>
@@ -640,8 +720,8 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
                 
                 // Fallback timeout in case message doesn't come back
                 setTimeout(() => {
-                    const responseArea = document.getElementById('responseArea');
-                    if (responseArea.innerHTML.includes('LearnSor is thinking')) {
+                    const spinnerStillVisible = document.getElementById('responseContent')?.textContent?.includes('LearnSor is thinking');
+                    if (spinnerStillVisible) {
                         showError('Request timed out. Please try again or check your API key.');
                     }
                 }, 30000);
@@ -649,7 +729,12 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
             
             function showLoading() {
                 const responseArea = document.getElementById('responseArea');
-                responseArea.innerHTML = '<div class="loading"><div class="spinner">🤔</div><h3>LearnSor is thinking...</h3><p>Generating your personalized learning response</p></div>';
+                const responseTitle = document.getElementById('responseTitle');
+                const responseContent = document.getElementById('responseContent');
+                if (responseTitle) responseTitle.textContent = 'Working…';
+                if (responseContent) {
+                    responseContent.innerHTML = '<div class="loading"><div class="spinner">🤔</div><h3>LearnSor is thinking...</h3><p>Generating your personalized learning response</p></div>';
+                }
                 responseArea.classList.add('show');
             }
             
@@ -661,7 +746,7 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
             }
             
             function unlockNextLevel(currentIndex) {
-                const levels = ['logical', 'pseudocode', 'functions', 'snippet'];
+                const levels = ['concept', 'how', 'code'];
                 if (currentIndex < levels.length - 1) {
                     const nextLevel = levels[currentIndex + 1];
                     const nextButton = document.getElementById(\`level-\${nextLevel}\`);
@@ -673,16 +758,25 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
                             const statusSpan = nextButton.querySelector('.level-status');
                             statusSpan.textContent = 'AVAILABLE';
                             statusSpan.className = 'level-status available';
-                        }, 60000); // 60 seconds
+                        }, 3000); // 3 seconds
                         
                         // Show countdown
                         const statusSpan = nextButton.querySelector('.level-status');
                         let countdown = 60;
                         const timer = setInterval(() => {
+                            // If already unlocked somewhere else, mark READY and stop
+                            if (!nextButton.classList.contains('disabled')) {
+                                clearInterval(timer);
+                                statusSpan.textContent = 'READY';
+                                statusSpan.className = 'level-status available';
+                                return;
+                            }
                             statusSpan.textContent = \`WAIT \${countdown}s\`;
                             countdown--;
                             if (countdown < 0) {
                                 clearInterval(timer);
+                                statusSpan.textContent = 'READY';
+                                statusSpan.className = 'level-status available';
                             }
                         }, 1000);
                     }
@@ -724,22 +818,42 @@ function getEnhancedInterfaceHtml(selectedCode, question) {
                         break;
                     case 'showResponse':
                         const responseArea = document.getElementById('responseArea');
-                        const responseTitle = document.getElementById('responseTitle');
-                        const responseContent = document.getElementById('responseContent');
-                        
+                        let responseTitle = document.getElementById('responseTitle');
+                        let responseContent = document.getElementById('responseContent');
+                        if (!responseTitle || !responseContent) {
+                            responseArea.innerHTML = '<h3 id="responseTitle"></h3><div id="responseContent"></div>';
+                            responseTitle = document.getElementById('responseTitle');
+                            responseContent = document.getElementById('responseContent');
+                        }
                         responseTitle.textContent = message.levelTitle + ' Response';
-                        responseContent.innerHTML = message.response.replace(/\\n/g, '<br>');
+                        responseContent.textContent = message.response || '';
+                        responseContent.style.whiteSpace = 'pre-wrap';
                         responseArea.classList.add('show');
                         
                         // Show chat interface
                         document.getElementById('chatInterface').classList.add('show');
                         
                         // Unlock next level if available
-                        const levels = ['logical', 'pseudocode', 'functions', 'snippet'];
+                        const levels = ['concept', 'how', 'code'];
                         const currentIndex = levels.indexOf(message.level);
                         if (currentIndex >= 0) {
                             unlockNextLevel(currentIndex);
                         }
+                        break;
+                    case 'markCompleted':
+                        // Grey out and disable the completed level button
+                        (function(){
+                            const id = message.level;
+                            const btn = document.getElementById('level-' + id) || document.querySelector('[onclick="requestLevel(\'' + id + '\', 0)"]');
+                            if (!btn) return;
+                            btn.classList.add('disabled');
+                            btn.onclick = null;
+                            const statusSpan = btn.querySelector('.level-status');
+                            if (statusSpan) {
+                                statusSpan.textContent = 'DONE';
+                                statusSpan.className = 'level-status completed';
+                            }
+                        })();
                         break;
                     case 'showFollowUpResponse':
                         addChatMessage(message.response, 'assistant');

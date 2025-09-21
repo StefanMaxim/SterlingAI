@@ -497,6 +497,50 @@ def parse_and_enhance_hints(level1_hints, level2_hints, level3_hints):
     return '\n'.join(enhanced_lines)
 
 
+
+# Partial generation wrapper: compute only up to requested level
+def generate_hints_for_level(user_code, task_description, filename=None, project_path=".", programming_language=None, additional_instructions=None, target_level="level1"):
+    """
+    Generate hints up to a target level to minimize unnecessary API calls.
+
+    target_level: one of 'level1', 'level2', 'level3', or mapped inputs
+                  like 'logical'/'pseudocode' -> level1, 'functions' -> level2, 'snippet' -> level3
+    """
+    level_map = {
+        'logical': 'level1',
+        'pseudocode': 'level1',
+        'functions': 'level2',
+        'snippet': 'level3',
+        'level1': 'level1',
+        'level2': 'level2',
+        'level3': 'level3',
+    }
+    target = level_map.get(str(target_level).lower(), 'level1')
+
+    # Determine language
+    lang = programming_language or (detect_language_from_filename(filename) if filename else 'python')
+
+    # Compute only what is needed
+    l1 = generate_hints(user_code, task_description, programming_language=lang, filename=filename, project_path=project_path, additional_instructions=additional_instructions)
+
+    l2 = ""
+    l3 = ""
+    if target in ("level2", "level3"):
+        l2 = generate_level2_hints(l1, lang, user_code, task_description)
+    if target == "level3":
+        l3 = generate_level3_hints(l2, lang, user_code, task_description)
+
+    # Build combined view using available levels only
+    if target == 'level1':
+        combined = l1
+    elif target == 'level2':
+        combined = parse_and_enhance_hints(l1, l2, "")
+    else:
+        combined = parse_and_enhance_hints(l1, l2, l3)
+
+    return {"level1": l1, "level2": l2, "level3": l3, "combined": combined}
+
+
 __all__ = [
     "generate_hints",
     "generate_level2_hints",
@@ -504,6 +548,7 @@ __all__ = [
     "parse_and_enhance_hints",
     "detect_language_from_filename",
     "generate_all_hints",
+    "generate_hints_for_level",
 ]
 
 def generate_all_hints(user_code, task_description, filename=None, project_path=".", programming_language=None, additional_instructions=None):
