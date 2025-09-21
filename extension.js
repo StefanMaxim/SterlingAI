@@ -172,6 +172,8 @@ function handleLevelRequest(requestedLevel, selectedText, question, editor, pane
 }
 
 function handleFollowUpQuestion(followUpQuestion, selectedText, editor, panel) {
+  console.log('Handling follow-up question:', followUpQuestion);
+  
   const followUpPrompt = `This is a casual follow-up question, NOT a structured learning exercise.
 
 User asked: "${followUpQuestion}"
@@ -187,14 +189,17 @@ ABSOLUTELY FORBIDDEN:
 
 This should read like a normal text message conversation. Be helpful but casual and general.`;
 
+  console.log('Calling generateFollowUpResponse...');
   generateFollowUpResponse(followUpPrompt)
     .then(function(response) {
+      console.log('Follow-up response received:', response);
       panel.webview.postMessage({
         command: 'showFollowUpResponse',
         response: response
       });
     })
     .catch(function(error) {
+      console.error('Follow-up error:', error);
       panel.webview.postMessage({
         command: 'showError',
         message: error.message || 'Unknown error occurred'
@@ -434,6 +439,8 @@ function generateEducationalResponse(code, question, level, language) {
 
 function generateFollowUpResponse(prompt) {
   return new Promise(function(resolve, reject) {
+    console.log('generateFollowUpResponse called with prompt length:', prompt.length);
+    
     const folders = vscode.workspace.workspaceFolders;
     let workspaceRoot = null;
     
@@ -441,8 +448,10 @@ function generateFollowUpResponse(prompt) {
       for (const folder of folders) {
         if (folder.uri && folder.uri.fsPath) {
           const wsPath = folder.uri.fsPath;
+          console.log('Checking workspace folder for .env:', wsPath);
           if (fs.existsSync(path.join(wsPath, '.env'))) {
             workspaceRoot = wsPath;
+            console.log('Found .env at:', workspaceRoot);
             break;
           }
         }
@@ -451,6 +460,7 @@ function generateFollowUpResponse(prompt) {
     
     if (!workspaceRoot) {
       workspaceRoot = process.cwd();
+      console.log('Using fallback workspace:', workspaceRoot);
     }
 
     const pySnippet = `
@@ -488,6 +498,9 @@ print(json.dumps({"response": result}))
 
     const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
     
+    console.log('Starting Python for follow-up with command:', pythonCmd);
+    console.log('Working directory:', workspaceRoot);
+    
     try {
       const child = spawn(pythonCmd, ['-c', pySnippet], { cwd: workspaceRoot, env: process.env });
       
@@ -498,6 +511,10 @@ print(json.dumps({"response": result}))
       child.stderr.on('data', function(data) { stderr += data.toString(); });
       
       child.on('close', function(code) {
+        console.log('Python follow-up process closed with code:', code);
+        if (stderr) console.log('Python stderr:', stderr);
+        if (stdout) console.log('Python stdout:', stdout);
+        
         if (code !== 0) {
           return reject(new Error('Python exited with code ' + code + (stderr ? (': ' + stderr) : '')));
         }
