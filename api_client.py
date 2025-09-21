@@ -286,7 +286,7 @@ def generate_hints(user_code, task_description, programming_language=None, filen
     full_context = extract_relevant_context(user_code, project_context, task_description, active_summary)
 
     # Build the prompt with full context awareness
-    prompt = f"""You are LearnSor, an AI tutor that helps people learn programming by providing hints instead of writing code for them.
+    prompt = f"""You are Sterling, an AI tutor that helps people learn programming by providing hints instead of writing code for them.
 
 CONTEXT ANALYSIS:
 {full_context}
@@ -351,7 +351,7 @@ def generate_level2_hints(level1_response, programming_language, user_code="", t
     start_comment, end_comment = get_comment_block_syntax(programming_language)
 
     # Build the prompt for HOW hints only with full context
-    prompt = f"""You are LearnSor, an AI tutor that helps people learn programming by providing hints instead of writing code for them.
+    prompt = f"""You are Sterling, an AI tutor that helps people learn programming by providing hints instead of writing code for them.
 
 CONTEXT FROM LEVEL 1:
 The user has already received these foundational hints:
@@ -423,7 +423,7 @@ def generate_level3_hints(level2_response, programming_language, user_code="", t
     start_comment, end_comment = get_comment_block_syntax(programming_language)
 
     # Build the prompt
-    prompt = f"""You are LearnSor, an AI tutor that helps people learn programming.
+    prompt = f"""You are Sterling, an AI tutor that helps people learn programming.
 
 CONTEXT FROM LEVEL 2:
 The user has already received these HOW hints:
@@ -658,7 +658,7 @@ GUI Usage:
 """
 # Example usage - Test with different scenarios
 if __name__ == "__main__":
-    print("LearnSor Hint Generation Examples")
+    print("Sterling Hint Generation Examples")
     print("=" * 40)
 
     # Example 1: Level 1 → Level 2 → Level 3 Hinting Progression

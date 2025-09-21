@@ -23,7 +23,7 @@ let isRequestInFlight = false;
 function activate(context) {
   console.log('Sterling extension is now active!');
 
-  const disposable = vscode.commands.registerCommand('learnsor.askQuestion', function() {
+  const disposable = vscode.commands.registerCommand('sterling.askQuestion', function() {
     console.log('Sterling command triggered!');
     
     const editor = vscode.window.activeTextEditor;
@@ -174,6 +174,15 @@ function handleLevelRequest(requestedLevel, selectedText, question, editor, pane
 function handleFollowUpQuestion(followUpQuestion, selectedText, editor, panel) {
   console.log('Handling follow-up question:', followUpQuestion);
   
+  // Check if request already in progress
+  if (isRequestInFlight) {
+    panel.webview.postMessage({
+      command: 'showError',
+      message: 'A request is already in progress. Please wait for it to complete.'
+    });
+    return;
+  }
+  
   const followUpPrompt = `This is a casual follow-up question, NOT a structured learning exercise.
 
 User asked: "${followUpQuestion}"
@@ -189,6 +198,8 @@ ABSOLUTELY FORBIDDEN:
 
 This should read like a normal text message conversation. Be helpful but casual and general.`;
 
+  isRequestInFlight = true;
+  
   console.log('Calling generateFollowUpResponse...');
   generateFollowUpResponse(followUpPrompt)
     .then(function(response) {
@@ -204,6 +215,9 @@ This should read like a normal text message conversation. Be helpful but casual 
         command: 'showError',
         message: error.message || 'Unknown error occurred'
       });
+    })
+    .finally(function() {
+      isRequestInFlight = false;
     });
 }
 
@@ -341,145 +355,104 @@ function getLanguageFromUri(uri) {
   return langMap[extLower] || 'code';
 }
 
+function findWorkspaceRoot(targetFile = 'api_client.py') {
+  const activeEditor = vscode.window.activeTextEditor;
+  const folders = vscode.workspace.workspaceFolders;
+  let workspaceRoot = null;
+  
+  // Method 1: Check workspace folders for target file
+  if (folders && folders.length > 0) {
+    for (const folder of folders) {
+      if (folder.uri && folder.uri.fsPath) {
+        const wsPath = folder.uri.fsPath;
+        if (fs.existsSync(path.join(wsPath, targetFile))) {
+          workspaceRoot = wsPath;
+          break;
+        }
+      }
+    }
+  }
+  
+  // Method 2: Use active editor file path and search up
+  if (!workspaceRoot && activeEditor && activeEditor.document && activeEditor.document.uri) {
+    const filePath = activeEditor.document.uri.fsPath;
+    let testDir = path.dirname(filePath);
+    
+    for (let i = 0; i < 10; i++) {
+      if (fs.existsSync(path.join(testDir, targetFile))) {
+        workspaceRoot = testDir;
+        break;
+      }
+      const parentDir = path.dirname(testDir);
+      if (parentDir === testDir) break;
+      testDir = parentDir;
+    }
+  }
+  
+  // Method 3: Direct hardcoded check for known location
+  if (!workspaceRoot) {
+    const knownPaths = [
+      'C:\\Users\\ericl\\LearnSor\\LearnSor',
+      path.join(process.cwd(), 'Sterling'),
+      process.cwd()
+    ];
+    
+    for (const testPath of knownPaths) {
+      if (fs.existsSync(testPath) && fs.existsSync(path.join(testPath, targetFile))) {
+        workspaceRoot = testPath;
+        break;
+      }
+    }
+  }
+  
+  // Method 4: Limited recursive search inside workspace folders
+  if (!workspaceRoot && folders && folders.length > 0) {
+    try {
+      const maxDepth = 4;
+      const visited = new Set();
+
+      function searchDir(dir, depth) {
+        if (!dir || depth > maxDepth || visited.has(dir)) return null;
+        visited.add(dir);
+        let entries;
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return null; }
+
+        for (const e of entries) {
+          const full = path.join(dir, e.name);
+          if (e.isFile() && e.name === targetFile) return dir;
+          if (e.isDirectory()) {
+            const found = searchDir(full, depth + 1);
+            if (found) return found;
+          }
+        }
+        return null;
+      }
+
+      for (const folder of folders) {
+        try {
+          const start = folder.uri && folder.uri.fsPath ? folder.uri.fsPath : null;
+          if (!start) continue;
+          const found = searchDir(start, 0);
+          if (found) { workspaceRoot = found; break; }
+        } catch (e) {
+          console.log('Error searching folder', folder, e && e.message);
+        }
+      }
+    } catch (e) {
+      console.log('Error during recursive search for ' + targetFile + ':', e && e.message);
+    }
+  }
+  
+  return workspaceRoot;
+}
+
 function generateEducationalResponse(code, question, level, language) {
   return new Promise(function(resolve, reject) {
     const activeEditor = vscode.window.activeTextEditor;
-    let workspaceRoot = null;
-    
-    const folders = vscode.workspace.workspaceFolders;
-    
-    if (folders && folders.length > 0) {
-      for (const folder of folders) {
-        if (folder.uri && folder.uri.fsPath) {
-          const wsPath = folder.uri.fsPath;
-          if (fs.existsSync(path.join(wsPath, 'api_client.py'))) {
-            workspaceRoot = wsPath;
-            break;
-          }
-        }
-      }
-    }
-    
-    if (!workspaceRoot && activeEditor && activeEditor.document && activeEditor.document.uri) {
-      const filePath = activeEditor.document.uri.fsPath;
-      let testDir = path.dirname(filePath);
-      
-      for (let i = 0; i < 10; i++) {
-        if (fs.existsSync(path.join(testDir, 'api_client.py'))) {
-          workspaceRoot = testDir;
-          break;
-        }
-        const parentDir = path.dirname(testDir);
-        if (parentDir === testDir) break;
-        testDir = parentDir;
-      }
-    }
+    let workspaceRoot = findWorkspaceRoot('api_client.py');
     
     if (!workspaceRoot) {
-      const knownPaths = [
-        'C:\\Users\\ericl\\LearnSor\\LearnSor',
-        path.join(process.cwd(), 'LearnSor'),
-        process.cwd()
-      ];
-      
-      for (const testPath of knownPaths) {
-        if (fs.existsSync(testPath) && fs.existsSync(path.join(testPath, 'api_client.py'))) {
-          workspaceRoot = testPath;
-          break;
-        }
-      }
-    }
-    
-    // If still not found, perform a limited recursive search inside each workspace folder
-    if (!workspaceRoot) {
-      console.log('api_client.py not found in obvious locations, starting limited workspace search');
-      try {
-        const maxDepth = 4;
-        const visited = new Set();
-
-        function searchDir(dir, depth) {
-          if (!dir || depth > maxDepth || visited.has(dir)) return null;
-          visited.add(dir);
-          let entries;
-          try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return null; }
-
-          for (const e of entries) {
-            const full = path.join(dir, e.name);
-            if (e.isFile() && e.name === 'api_client.py') return dir;
-            if (e.isDirectory()) {
-              const found = searchDir(full, depth + 1);
-              if (found) return found;
-            }
-          }
-          return null;
-        }
-
-        if (folders && folders.length > 0) {
-          for (const folder of folders) {
-            try {
-              const start = folder.uri && folder.uri.fsPath ? folder.uri.fsPath : null;
-              if (!start) continue;
-              const found = searchDir(start, 0);
-              console.log('Searched workspace folder:', start, 'found:', !!found);
-              if (found) { workspaceRoot = found; break; }
-            } catch (e) {
-              console.log('Error searching folder', folder, e && e.message);
-            }
-          }
-        }
-      } catch (e) {
-        console.log('Error during recursive search for api_client.py:', e && e.message);
-      }
-    }
-
-    if (!workspaceRoot) {
-      // Build a list of candidate paths to check and log each check for diagnostics
-      const candidates = [];
-      try {
-        // workspace folders
-        if (folders && folders.length > 0) {
-          for (const f of folders) if (f && f.uri && f.uri.fsPath) candidates.push(f.uri.fsPath);
-        }
-
-        // __dirname (extension install location)
-        candidates.push(__dirname);
-
-        // process cwd
-        candidates.push(process.cwd());
-
-        // active editor file's directory and upward parents
-        if (activeEditor && activeEditor.document && activeEditor.document.uri) {
-          let p = path.dirname(activeEditor.document.uri.fsPath);
-          for (let i = 0; i < 6 && p; i++) {
-            candidates.push(p);
-            const parent = path.dirname(p);
-            if (parent === p) break;
-            p = parent;
-          }
-        }
-      } catch (e) {
-        console.log('Error building candidate list for api_client.py', e && e.message);
-      }
-
-      // De-duplicate and check candidates
-      const uniq = Array.from(new Set(candidates.filter(Boolean)));
-      console.log('api_client.py candidates to check:', uniq);
-
-      for (const c of uniq) {
-        try {
-          const exists = fs.existsSync(path.join(c, 'api_client.py'));
-          console.log('Checking', c, 'api_client.py exists=', exists);
-          if (exists) { workspaceRoot = c; break; }
-        } catch (e) {
-          console.log('Error checking candidate', c, e && e.message);
-        }
-      }
-
-      // If still not found, give a helpful diagnostic list in the error
-      if (!workspaceRoot) {
-        const tried = uniq.slice(0, 20).join(', ');
-        return reject(new Error('Could not find api_client.py. Paths tried: ' + tried));
-      }
+      return reject(new Error('Could not find api_client.py in workspace'));
     }
 
     const filename = (activeEditor && activeEditor.document && activeEditor.document.fileName)
@@ -554,63 +527,16 @@ function generateFollowUpResponse(prompt) {
   return new Promise(function(resolve, reject) {
     console.log('generateFollowUpResponse called with prompt length:', prompt.length);
     
-    const activeEditor = vscode.window.activeTextEditor;
-    const folders = vscode.workspace.workspaceFolders;
-    let workspaceRoot = null;
+    // Use the same robust workspace finding logic, but look for .env file
+    let workspaceRoot = findWorkspaceRoot('.env');
     
-    // Method 1: Check workspace folders for .env file
-    if (folders && folders.length > 0) {
-      for (const folder of folders) {
-        if (folder.uri && folder.uri.fsPath) {
-          const wsPath = folder.uri.fsPath;
-          console.log('Checking workspace folder for .env:', wsPath);
-          if (fs.existsSync(path.join(wsPath, '.env'))) {
-            workspaceRoot = wsPath;
-            console.log('Found .env at:', workspaceRoot);
-            break;
-          }
-        }
-      }
-    }
-    
-    // Method 2: Use active editor file path and search up
-    if (!workspaceRoot && activeEditor && activeEditor.document && activeEditor.document.uri) {
-      const filePath = activeEditor.document.uri.fsPath;
-      console.log('Active file path:', filePath);
-      let testDir = path.dirname(filePath);
-      
-      // Search up the directory tree for .env file
-      for (let i = 0; i < 10; i++) {
-        console.log('Checking directory for .env:', testDir);
-        if (fs.existsSync(path.join(testDir, '.env'))) {
-          workspaceRoot = testDir;
-          console.log('Found .env at:', workspaceRoot);
-          break;
-        }
-        const parentDir = path.dirname(testDir);
-        if (parentDir === testDir) break; // reached root
-        testDir = parentDir;
-      }
-    }
-    
-    // Method 3: Direct hardcoded check for known location
+    // If .env not found, try to find workspace by api_client.py and assume .env is there
     if (!workspaceRoot) {
-      const knownPaths = [
-        'C:\\Users\\ericl\\LearnSor\\LearnSor',
-        path.join(process.cwd(), 'LearnSor')
-      ];
-      
-      for (const testPath of knownPaths) {
-        console.log('Checking known path for .env:', testPath);
-        if (fs.existsSync(testPath) && fs.existsSync(path.join(testPath, '.env'))) {
-          workspaceRoot = testPath;
-          console.log('Found .env at known path:', workspaceRoot);
-          break;
-        }
-      }
+      workspaceRoot = findWorkspaceRoot('api_client.py');
+      console.log('Fallback to api_client.py location:', workspaceRoot);
     }
     
-    // Fallback
+    // Final fallback
     if (!workspaceRoot) {
       workspaceRoot = process.cwd();
       console.log('Using fallback workspace:', workspaceRoot);
@@ -737,7 +663,7 @@ function getEnhancedInterfaceHtml(selectedCode, question, webview) {
       <html>
       <head>
           <meta charset="UTF-8">
-          <title>LearnSor - Error</title>
+          <title>Sterling - Error</title>
       </head>
       <body>
           <h1>Error loading interface</h1>

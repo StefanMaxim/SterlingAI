@@ -1,4 +1,4 @@
-# LearnSor - AI-Powered Learning Assistant
+# Sterling - AI-Powered Learning Assistant
 # Core dependencies for hint generation and context analysis
 
 # AI/ML

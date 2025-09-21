@@ -32,7 +32,7 @@ const vscode = acquireVsCodeApi();
                 const timeoutMs = 30000;
                 setTimeout(() => {
                     const el = document.getElementById('responseContent');
-                    const stillLoading = el && el.innerHTML && el.innerHTML.includes('LearnSor is thinking');
+                    const stillLoading = el && el.innerHTML && el.innerHTML.includes('Sterling is thinking');
                     if (stillLoading) {
                         clearLoading(); // Clear loading state
                         showError('Request timed out. Please try again or check your API key.');
@@ -112,7 +112,7 @@ const vscode = acquireVsCodeApi();
                 const responseContent = document.getElementById('responseContent');
                 if (responseTitle) responseTitle.textContent = 'Working…';
                 if (responseContent) {
-                    responseContent.innerHTML = '<div class="loading"><div class="spinner">🤔</div><h3>LearnSor is thinking...</h3><p>Generating your personalized learning response</p></div>';
+                    responseContent.innerHTML = '<div class="loading"><div class="spinner">🤔</div><h3>Sterling is thinking...</h3><p>Generating your personalized learning response</p></div>';
                 }
                 if (responseArea) responseArea.classList.add('show');
             }
@@ -120,7 +120,7 @@ const vscode = acquireVsCodeApi();
             function clearLoading() {
                 webviewRequestInProgress = false;
                 const responseContent = document.getElementById('responseContent');
-                if (responseContent && responseContent.innerHTML.includes('LearnSor is thinking')) {
+                if (responseContent && responseContent.innerHTML.includes('Sterling is thinking')) {
                     responseContent.innerHTML = '';
                 }
             }

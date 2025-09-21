@@ -29,7 +29,7 @@
     "configuration": {
       "title": "Sterling",
       "properties": {
-        "learnsor.apiKey": {
+        "sterling.apiKey": {
           "type": "string",
           "default": "",
           "description": "Your Claude API key"

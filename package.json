@@ -1,6 +1,6 @@
 {
-  "name": "learnsor",
-  "displayName": "LearnSor - AI Learning Assistant",
+  "name": "sterling",
+  "displayName": "Sterling - AI Learning Assistant",
   "description": "Educational AI that teaches programming concepts step-by-step",
   "version": "0.0.1",
   "engines": {
@@ -8,28 +8,28 @@
   },
   "categories": ["Education", "Other"],
   "activationEvents": [
-    "onCommand:learnsor.askQuestion"
+    "onCommand:sterling.askQuestion"
   ],
   "main": "./extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "learnsor.askQuestion",
-        "title": "Ask LearnSor"
+        "command": "sterling.askQuestion",
+        "title": "Ask Sterling"
       }
     ],
     "keybindings": [
       {
-        "command": "learnsor.askQuestion",
+        "command": "sterling.askQuestion",
         "key": "ctrl+shift+l",
         "mac": "cmd+shift+l",
         "when": "editorTextFocus && editorHasSelection"
       }
     ],
     "configuration": {
-      "title": "LearnSor",
+      "title": "Sterling",
       "properties": {
-        "learnsor.apiKey": {
+        "sterling.apiKey": {
           "type": "string",
           "default": "",
           "description": "Your Claude API key"
