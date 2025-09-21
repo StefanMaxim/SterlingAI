@@ -22,10 +22,10 @@ let userProgress = {
 let isRequestInFlight = false;
 
 function activate(context) {
-  console.log('LearnSor extension is now active!');
+  console.log('Sterling extension is now active!');
 
   const disposable = vscode.commands.registerCommand('learnsor.askQuestion', function() {
-    console.log('LearnSor command triggered!');
+    console.log('Sterling command triggered!');
     
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
@@ -70,8 +70,8 @@ function activate(context) {
 function showLearningInterface(context, selectedText, question, editor) {
   console.log('Creating enhanced webview panel');
   const panel = vscode.window.createWebviewPanel(
-    'learnsor',
-    'LearnSor Learning Assistant',
+    'Sterling',
+    'Sterling Learning Assistant',
     vscode.ViewColumn.Beside,
     {
       enableScripts: true,

@@ -32,7 +32,7 @@ function requestLevel(levelId) {
     const timeoutMs = 30000;
     setTimeout(() => {
         const el = document.getElementById('responseContent');
-        const stillLoading = el && el.textContent && el.textContent.includes('LearnSor is thinking');
+        const stillLoading = el && el.textContent && el.textContent.includes('Sterling is thinking');
         if (stillLoading) {
             showError('Request timed out. Please try again or check your API key.');
         }
@@ -74,7 +74,7 @@ function showLoading() {
     const responseContent = document.getElementById('responseContent');
     if (responseTitle) responseTitle.textContent = 'Working…';
     if (responseContent) {
-        responseContent.innerHTML = '<div class="loading"><div class="spinner">🤔</div><h3>LearnSor is thinking...</h3><p>Generating your personalized learning response</p></div>';
+        responseContent.innerHTML = '<div class="loading"><div class="spinner">🤔</div><h3>Sterling is thinking...</h3><p>Generating your personalized learning response</p></div>';
     }
     responseArea.classList.add('show');
 }
